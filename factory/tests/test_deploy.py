@@ -2269,15 +2269,71 @@ class YouTrackFieldValuesTest(unittest.TestCase):
         self.assertEqual(writes, [])
 
 
-class MissingMcpEnvTest(unittest.TestCase):
-    def test_deploy_without_operator_vars_exits_2_not_keyerror(self):
-        err = io.StringIO()
-        env = {k: v for k, v in os.environ.items() if not k.startswith("FACTORY_MCP_AIR_")}
-        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(deploy, "check_fixture_drift", lambda c: 0), \
-                contextlib.redirect_stderr(err):
-            self.assertEqual(deploy.main(["--dry-run"]), 2)
-        self.assertIn("FACTORY_MCP_AIR_AUTOMATIONS", err.getvalue())
+class RestAdapterTest(unittest.TestCase):
+    """Deploy without MCP: the REST adapters answer the MCP tool calls deploy makes."""
 
+    def adapter(self, cls, answers):
+        from factory_plugins.air import deploy as air
+        a, calls = cls(token="t"), []
+
+        def request(method, path, body=None):
+            calls.append((method, path, body))
+            return answers.get((method, path.split("?")[0]), {})
+        a.request = request
+        return a, calls
+
+    def test_automation_create_update_pause_delete(self):
+        from factory_plugins.air import deploy as air
+        current = {"automationId": "A", "name": "[P] n", "prompt": "old", "paused": False, "projectId": "p",
+                   "additionalRepositories": [{"repository": {"fullName": "o/r"}}],
+                   "triggers": [{"triggerType": "WEBHOOK", "triggerId": "t", "automationSnapshotId": "s", "isEnabled": True}]}
+        a, calls = self.adapter(air.RestAutomations, {("GET", "/automations/A"): current,
+                                                      ("POST", "/automations"): {"automationId": "A"}})
+        self.assertEqual(a.call("create_automation", {"name": "[P] n"})["automationId"], "A")
+        self.assertIsNone(calls[-1][2]["id"])  # `id: null` creates
+        a.call("update_automation", {"automationId": "A", "prompt": "new"})
+        body = calls[-1][2]
+        self.assertEqual((body["id"], body["prompt"], body["projectId"]), ("A", "new", "p"))
+        self.assertEqual(body["triggers"], [{"triggerType": "WEBHOOK", "isEnabled": True}])
+        self.assertEqual(body["additionalRepositories"], current["additionalRepositories"])
+        a.call("update_automation", {"automationId": "A", "paused": True})
+        self.assertEqual(calls[-1], ("PATCH", "/automations/A", {"paused": True}))
+        a.call("delete_automation", {"automationId": "A", "confirmName": "[P] n"})
+        self.assertEqual(calls[-1], ("DELETE", "/automations/A", {"confirmName": "[P] n"}))
+
+    def test_lists_split_personal_and_project(self):
+        from factory_plugins.air import deploy as air
+        a, _ = self.adapter(air.RestAutomations, {
+            ("GET", "/automations"): {"automations": [{"automationId": "1"}, {"automationId": "2", "projectId": "p"}]},
+            ("GET", "/automations/projects"): {"automations": [{"automationId": "2", "projectId": "p"}]}})
+        self.assertEqual([x["automationId"] for x in a.call("list_automations", {"privacy": "private"})], ["1"])
+        self.assertEqual(a.call("list_automations", {}), {"projects": [{"automationId": "2", "projectId": "p"}]})
+
+    def test_environments(self):
+        from factory_plugins.air import deploy as air
+        mine = {"id": "e1", "name": "[P] x", "serviceHost": "github.com", "organization": "jetbrains", "repositoryName": "r"}
+        theirs = {**mine, "id": "e2", "orgProjectId": "p"}
+        c, calls = self.adapter(air.RestCloud, {("GET", "/env-configs"): [mine, theirs], ("GET", "/env-configs/e2"): theirs})
+        self.assertEqual([x["id"] for x in c.call("list_environments", {"repositoryUrl": "https://github.com/JetBrains/r"})], ["e1"])
+        self.assertEqual(c.call("get_environment", {"id": "e2"})["projectId"], "p")
+        c.call("edit_environment", {"id": "e1", "variables": [{"key": "K", "value": "unset"}], "vm": "default", "secrets": ["S"]})
+        self.assertEqual(calls[-1], ("PATCH", "/env-configs/e1", {"variables": [{"key": "K", "value": "unset"}], "instanceTypeKey": None}))
+
+    def test_http_error_is_a_runtime_error_with_air_detail(self):
+        import urllib.error
+        from factory_plugins.air import deploy as air
+        a = air.RestAutomations(token="t")
+
+        def fail(*_):
+            raise urllib.error.HTTPError("u", 403, "x", {}, io.BytesIO(b'{"detail":"AIRA-619"}'))
+        a.request = fail
+        with self.assertRaisesRegex(RuntimeError, "HTTP 403.*AIRA-619"):
+            a.call("get_automation", {"automationId": "A"})
+
+    def test_token_from_environment(self):
+        from factory_plugins.air import deploy as air
+        with mock.patch.dict(os.environ, {"FACTORY_AIR_AUTOMATIONS_TOKEN": "a", "FACTORY_AIR_BACKEND_TOKEN": "b"}):
+            self.assertEqual((air.RestAutomations().token(), air.RestCloud().token()), ("a", "b"))
 
 
 SLOP, TEAM = "zaharchenko-evgeny/slop-factory", "zaharchenko-evgeny/slop-eval-factory"

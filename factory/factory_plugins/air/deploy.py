@@ -8,8 +8,9 @@
 Usage: deploy.py plan --target air
        deploy.py (--dry-run | --apply [--allow-delete]) [--rename 'OLD NAME=NEW NAME']... [--only SELECTOR]...
 --dry-run prints the diff against the existing automations and environments; --apply also writes it and re-lists to
-verify. The two Air MCP servers are started over stdio from the commands in FACTORY_MCP_AIR_AUTOMATIONS and
-FACTORY_MCP_AIR_CLOUD (they use the operator's local OAuth). Each --rename updates the existing item named OLD in
+verify. It calls the Air REST APIs with the operator's `jcp-mcp-bridge` login, or with the tokens in
+FACTORY_AIR_AUTOMATIONS_TOKEN and FACTORY_AIR_BACKEND_TOKEN; when FACTORY_MCP_AIR_AUTOMATIONS and FACTORY_MCP_AIR_CLOUD
+are both set, it starts those two Air MCP servers over stdio instead. Each --rename updates the existing item named OLD in
 place (same id) to NEW instead of creating NEW and deleting OLD.
 air: {"automations": [...], "environments": [...]}: one automation per enabled node and one environment per environment in use,
      for the factory-deploy skill.
@@ -301,6 +302,8 @@ class Backend:
         self.run = run
 
     def token(self) -> str:
+        if self._token is None and os.environ.get("FACTORY_AIR_AUTOMATIONS_TOKEN"):  # an unattended run (CI, a node)
+            self._token = os.environ["FACTORY_AIR_AUTOMATIONS_TOKEN"]
         if self._token is None:
             env = os.environ.copy()
             env.update({"JCP_MCP_API_URL": "https://api.jetbrains.cloud", "JCP_MCP_CLIENT_ID": "pi-lot",
@@ -368,6 +371,8 @@ class EnvBackend(Backend):
     AUDIENCE = "air-backend"
 
     def token(self) -> str:
+        if self._token is None and os.environ.get("FACTORY_AIR_BACKEND_TOKEN"):
+            self._token = os.environ["FACTORY_AIR_BACKEND_TOKEN"]
         if self._token is None:
             env = os.environ.copy()
             env.update({"JCP_MCP_API_URL": "https://api.jetbrains.cloud", "JCP_MCP_CLIENT_ID": "pi-lot",
@@ -399,6 +404,92 @@ class EnvBackend(Backend):
         """A new project environment for a planned one that has no personal source; deploy sets its variables after."""
         return self.request("POST", "/env-configs", {"name": p["name"], "repositoryUrl": p["repository"],
                                                      "orgProjectId": project_id})
+
+
+class RestError(RuntimeError):
+    """An Air REST error, as the MCP client raised it: a RuntimeError whose text carries Air's detail and codes."""
+
+
+def _rest(call):
+    try:
+        return call()
+    except urllib.error.HTTPError as e:
+        raise RestError(f"HTTP {e.code}: {e.read().decode(errors='replace')[:800]}") from e
+
+
+class RestAutomations(Backend):
+    """The air-automations MCP tools deploy calls, answered by the Air automation REST API, so a deploy needs no MCP
+    server: the operator's `jcp-mcp-bridge` login, or a token in FACTORY_AIR_AUTOMATIONS_TOKEN."""
+
+    def call(self, tool: str, args: dict):
+        return _rest(lambda: getattr(self, f"_{tool}")(args))
+
+    def close(self) -> None:
+        pass
+
+    def _list_automations(self, args):
+        if args.get("privacy") == "private":
+            return [x for x in self.list_automations() if not x.get("projectId")]
+        out, cursor = [], None  # every project's automations; read_state keeps the plan's project
+        while True:
+            page = self.request("GET", "/automations/projects?limit=100" + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else ""))
+            out += page.get("automations") or []
+            cursor = page.get("nextCursor")
+            if not page.get("hasMore") or not cursor:
+                return {"projects": out}
+
+    def _get_automation(self, args):
+        return self.get_automation(args["automationId"])
+
+    def _create_automation(self, args):
+        return self.request("POST", "/automations", {**args, "id": None})  # `id: null` creates; an id updates
+
+    def _update_automation(self, args):
+        """POST the whole automation with its id (a new snapshot): the record as Air has it, the changed fields over it."""
+        aid = args["automationId"]
+        change = {k: v for k, v in args.items() if k != "automationId"}
+        if set(change) == {"paused"}:
+            return self.request("PATCH", f"/automations/{urllib.parse.quote(aid, safe='')}", change)
+        current = self.get_automation(aid)
+        body = {k: current[k] for k in (*self.SPEC_FIELDS, "additionalRepositories") if current.get(k) is not None}
+        body["triggers"] = [{k: v for k, v in t.items() if k not in ("triggerId", "automationSnapshotId")}
+                            for t in body.get("triggers") or []]
+        return self.request("POST", "/automations", {**body, **change, "id": aid})
+
+    def _delete_automation(self, args):
+        self.request("DELETE", f"/automations/{urllib.parse.quote(args['automationId'], safe='')}",
+                     {"confirmName": args["confirmName"]})
+        return {"text": f"deleted {args['confirmName']}"}
+
+
+class RestCloud(EnvBackend):
+    """The air-cloud MCP tools deploy calls, answered by the air-backend `env-configs` REST API (token from
+    `jcp-mcp-bridge`, or FACTORY_AIR_BACKEND_TOKEN). Like the MCP tools, the lists hold personal environments."""
+
+    def call(self, tool: str, args: dict):
+        return _rest(lambda: getattr(self, f"_{tool}")(args))
+
+    def close(self) -> None:
+        pass
+
+    def _list_environments(self, args):
+        listed = _items(self.request("GET", "/env-configs") or [])
+        return [x for x in listed if not x.get("orgProjectId") and same_repository(env_url(x), args["repositoryUrl"])]
+
+    def _get_environment(self, args):
+        x = self.request("GET", f"/env-configs/{urllib.parse.quote(args['id'], safe='')}")
+        return {**x, **({"projectId": x["orgProjectId"]} if x.get("orgProjectId") else {})}
+
+    def _create_environment(self, args):
+        return self.request("POST", "/env-configs", args)
+
+    def _edit_environment(self, args):
+        """PATCH merges: `variables` upsert by key, so a variable a person set keeps its value."""
+        body = {k: v for k, v in args.items() if k in ("name", "allowedDomains", "variables", "networkAccess",
+                                                       "predefinedDomainLists")}
+        if "vm" in args:
+            body["instanceTypeKey"] = None if args["vm"] == "default" else args["vm"]
+        return self.request("PATCH", f"/env-configs/{urllib.parse.quote(args['id'], safe='')}", body)
 
 
 def project_environment_sources(plan: dict, missing: list[str], personal: list[dict]) -> dict[str, dict | None]:
@@ -925,10 +1016,9 @@ def main(argv: list[str]) -> int:
         if core.check_fixture_drift(config):
             return 1
         names = ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")
-        if not all(os.environ.get(v) for v in names):
-            print("set FACTORY_MCP_AIR_AUTOMATIONS and FACTORY_MCP_AIR_CLOUD (operator only)", file=sys.stderr)
-            return 2
-        servers = [Mcp(os.environ[v]) for v in names]
+        # REST by default; the two MCP servers only when both commands are set (the older path)
+        servers = [Mcp(os.environ[v]) for v in names] if all(os.environ.get(v) for v in names) \
+            else [RestAutomations(), RestCloud()]
         try:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
             run = next((hook(config) for hook in plugins.registry(config).hook("deploy.run")), None)

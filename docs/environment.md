@@ -17,8 +17,9 @@ One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails whe
 | `FACTORY_GH` | tests and development | `factory/factory_plugins/github/tracker.py` | optional; defaults to `gh` |
 | `FACTORY_DRY` | tests and development | no code reads it today | optional |
 | `FACTORY_BASE` | CI (`.github/workflows/quality-gates.yml`) for the descriptor checks | the checks' `run` commands | optional; defaults to `main` |
-| `FACTORY_MCP_AIR_AUTOMATIONS` | the operator, for `factory deploy` and `factory contracts refresh` | `factory/factory_plugins/air/deploy.py`, `factory/factory_plugins/air/contracts.py` | required for those commands |
-| `FACTORY_MCP_AIR_CLOUD` | the operator, for `factory deploy` and `factory contracts refresh` | `factory/factory_plugins/air/deploy.py`, `factory/factory_plugins/air/contracts.py` | required for those commands |
+| `FACTORY_MCP_AIR_AUTOMATIONS` | the operator, for `factory contracts refresh`; optional for `factory deploy` (with `FACTORY_MCP_AIR_CLOUD` it deploys through MCP instead of REST) | `factory/factory_plugins/air/deploy.py`, `factory/factory_plugins/air/contracts.py` | required for `contracts refresh` |
+| `FACTORY_MCP_AIR_CLOUD` | the operator, for `factory contracts refresh`; optional for `factory deploy` (see above) | `factory/factory_plugins/air/deploy.py`, `factory/factory_plugins/air/contracts.py` | required for `contracts refresh` |
+| `FACTORY_AIR_AUTOMATIONS_TOKEN`, `FACTORY_AIR_BACKEND_TOKEN` | an unattended `factory deploy` (CI, a service account) | `factory/factory_plugins/air/deploy.py` | optional: without them deploy asks `jcp-mcp-bridge` for the operator tokens |
 
 ## Team variables
 
