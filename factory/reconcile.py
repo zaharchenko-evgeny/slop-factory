@@ -230,14 +230,14 @@ def late_external_review(defn, facts, ago, head):
 
 
 def person_changes(facts, head):
-    """The reviewers (names) whose change request is not older than the PR head, else [] (#1533): `waiting_reviewers`
+    """(reviewers, latest request time) whose change request is not older than the PR head, else ([], None) (#1533): `waiting_reviewers`
     asked for changes, a fix round received them, and the head has not been pushed since the latest request."""
     waiting = set(facts.get("waiting_reviewers") or [])
     asked = [r.get("submitted_at") or "" for r in facts.get("reviews") or []
              if r.get("author") in waiting and r.get("verdict") == "changes"]
     if not waiting or not asked or (facts.get("commit_at") or "") > max(asked):
-        return []
-    return sorted(waiting)
+        return [], None
+    return sorted(waiting), max(asked)
 
 
 def stage_wakes(defn, tracker_stages, default):
@@ -343,9 +343,11 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
                     if progress:
                         progress(r)
                 continue
-            people = fix and facts.get("pr") and facts.get("pr_state") in (None, "none", "open") and fix[1] not in on_pr \
-                and person_changes(facts, head) or []
-            if people and gate.holds(nodes[fix[0]].get("when") or {}, facts, {}) \
+            people, asked_at = person_changes(facts, head) if fix and facts.get("pr") and \
+                facts.get("pr_state") in (None, "none", "open") and fix[1] not in on_pr else ([], None)
+            # the review's own trigger starts the fix; reconcile steps in only after the fix node's timeout
+            if people and ago(asked_at) > timedelta(minutes=nodes[fix[0]].get("timeout_minutes", default)) \
+                    and gate.holds(nodes[fix[0]].get("when") or {}, facts, {}) \
                     and not any(f"stage={stage} head={head} person-changes" in c for c in facts.get("recover_comments", [])):
                 step = ("person-changes", fix[0], fix[1], "pr", f"{', '.join(people)} asked for changes after the last push")
             elif (fix and facts.get("conflict") and facts.get("pr") and facts.get("pr_state") in (None, "none", "open")

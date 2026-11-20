@@ -284,6 +284,8 @@ class RecoverDefinitionTest(unittest.TestCase):
     def test_a_push_newer_than_the_person_review_or_a_fix_label_is_left_alone(self):
         self.assertEqual(self.recover(self.person_changes(commit_at="2026-11-03T10:30:00Z"))[1], [])
         self.assertEqual(self.recover(self.person_changes(pr_labels=["factory:fix"]))[1], [])
+        fresh = {"author": "alice", "verdict": "changes", "submitted_at": FRESH, "commit_id": "0ld"}
+        self.assertEqual(self.recover(self.person_changes(reviews=[fresh]))[1], [])  # its own trigger starts the fix
 
     def test_conflict_uses_the_fix_stage_of_the_definition(self):
         import copy
