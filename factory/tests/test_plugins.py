@@ -386,6 +386,15 @@ class LazinessTest(unittest.TestCase):
             """)
         self.assertIn("factory_plugins.chart.render", drawn)
 
+    def test_chart_of_a_definition_workflow_file_compiles_it(self):
+        """A definition's `workflow.yaml` path is compiled like `--team`, not read as raw nodes (KeyError: 'role')."""
+        env = {k: v for k, v in os.environ.items() if k != "FACTORY_TEAM"}
+        with tempfile.TemporaryDirectory() as home:  # no ~/factory-team, no team in cwd: only the path names one
+            result = subprocess.run([sys.executable, str(ROOT / "cli.py"), "chart", str(FIXTURES / "slop" / "workflow.yaml")],
+                                    cwd=home, env={**env, "HOME": home}, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr[-500:])
+        self.assertTrue(result.stdout.startswith("```mermaid"), result.stdout[:80])
+
     def test_chart_help_prints_usage_without_loading_nodes(self):
         result = subprocess.run([sys.executable, str(ROOT / "cli.py"), "chart", "--help"],
                                 cwd=ROOT.parent, capture_output=True, text=True)
