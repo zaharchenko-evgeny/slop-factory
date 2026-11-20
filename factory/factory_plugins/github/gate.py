@@ -1143,6 +1143,8 @@ class GitHubGateTracker(DescriptorPort):
                         events=events, ci=ci, commit_date=commit_date,
                         can_write=Lazy(self._can_write),
                         clean_advance=Lazy(lambda old: self._clean_base_advance(old, head, pr)), behind=behind,
+                        product_changed=Lazy(lambda old: any(not f["filename"].startswith(".factory/") for f in self._api(
+                            f"compare/{old}...{head}", repo=self.pr_repo)["files"])),  # (#1535)
                         unavailable=tuple(unavailable))
 
     def parent(self, n):

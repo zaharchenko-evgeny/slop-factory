@@ -79,6 +79,7 @@ class PrRecord:
     commit_date: str = ""
     can_write: Mapping = field(default_factory=dict)
     clean_advance: Mapping = field(default_factory=dict)
+    product_changed: Mapping = field(default_factory=dict)  # sha -> whether a file outside `.factory/` changed from sha to `head` (#1535)
     behind: bool | None = None  # want "behind": the base has commits the head lacks
     ci_failure: dict | None = None  # want "ci_failure": the first failed step at the head
     unavailable: tuple = ()  # partial reads that failed; absent evidence must not become a negative fact

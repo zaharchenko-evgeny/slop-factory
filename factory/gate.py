@@ -93,10 +93,11 @@ def holds(when, facts, event):
             have = set(facts.get("attrs") or []) | set(facts.get("pr_labels") or [])
             return all(x in have for x in (want if isinstance(want, list) else [want]))
         if key == "pr":
-            value(want, ("open", "merged", "behind", "conflicting", "none"))
+            value(want, ("open", "merged", "behind", "conflicting", "none", "product-changed"))
             return {"open": facts.get("pr_state") == "open", "merged": facts.get("pr_state") == "merged",
                     "behind": bool(facts.get("behind")), "conflicting": bool(facts.get("conflict")),
-                    "none": facts.get("pr_state", "none") == "none"}[want]
+                    "none": facts.get("pr_state", "none") == "none",
+                    "product-changed": bool(facts.get("product_changed", True))}[want]  # (#1535)
         if key == "review":
             value(want, ("approved-at-head", "changes-at-head", "none-at-head"))
             return review_at_head(facts) == want.removesuffix("-at-head").replace("approved", "approve")
