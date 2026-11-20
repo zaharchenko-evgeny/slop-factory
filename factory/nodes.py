@@ -34,6 +34,10 @@ def load(path=None):
         if not definition.present(config.team_root()):
             raise SystemExit(f"factory: no factory definition at {config.team_root()} (factory.yaml and workflow.yaml)")
         return definition.nodes(definition.load(config.team_root()))
+    root = Path(path) if Path(path).is_dir() else Path(path).parent
+    if (Path(path).is_dir() or Path(path).name == "workflow.yaml") and definition.present(root):
+        config.set_team(root)  # its labels and vocabulary come from this definition too
+        return definition.nodes(definition.load(root))  # a definition's workflow.yaml is compiled, not raw nodes
     return yaml.safe_load(Path(path).read_text())
 
 
