@@ -528,6 +528,12 @@ def label_plan(nodes: dict, config: dict, tickets=()) -> dict[str, list[str]]:
     the factory-owned labels it still has."""
     t = config.get("tracker") or {}
     tickets = list(dict.fromkeys([*github_homes(config), *tickets]))
+    # The doctor files GitHub issues even when the factory's main tracker is not GitHub Issues.
+    doctor_repo = None
+    has_doctor_repository = t.get("repository") or config_mod.vcs(config).get("repository")
+    if t.get("adapter") not in (None, "github-issues") and has_doctor_repository:
+        import doctor
+        doctor_repo = doctor.ticket_repository(config)
     common = sorted({*tracker_schema(nodes, config).labels,
                      *(x for x in (t.get("hold_label"), t.get("review_trigger")) if x)})
     yt, pr_side = youtrack_repositories(config), pr_side_labels(config)
@@ -535,6 +541,12 @@ def label_plan(nodes: dict, config: dict, tickets=()) -> dict[str, list[str]]:
            [*common, *([t["map_label"]] if i == 0 and t.get("map_label") else [])] for i, r in enumerate(tickets)}
     for r in config.get("repositories") or []:
         out.setdefault(repository(r)["fullName"], [])
+    if doctor_repo:
+        existing = next((r for r in out if r.lower() == doctor_repo.lower()), None)
+        risks = (t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values()
+        triage = (t.get("stages") or {}).get("triage") or vocab.stage("triage")
+        key = existing or doctor_repo
+        out[key] = sorted({*out.get(key, []), triage, *risks})
     return {r: sorted(set(ls)) for r, ls in out.items()}
 
 
