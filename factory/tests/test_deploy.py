@@ -2870,3 +2870,11 @@ class ProjectEnvironmentVariablesTest(unittest.TestCase):
             air.create_missing_variables(self.PLAN, envs, cloud)
         cloud.call.assert_called_once_with("edit_environment", {"id": "e1", "variables": [
             {"key": "O", "value": air.UNSET, "isSecret": True}]})
+
+
+class TriggerOrderTest(unittest.TestCase):
+    def test_reordered_triggers_are_the_same(self):
+        from factory_plugins.air import deploy as air
+        a, b = {"eventType": "x", "filters": {"l": 1}}, {"eventType": "y"}
+        self.assertTrue(air.same("triggers", [b, a], [a, b]))
+        self.assertFalse(air.same("triggers", [a], [a, b]))
