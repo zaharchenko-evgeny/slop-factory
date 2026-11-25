@@ -23,7 +23,7 @@ from functools import lru_cache
 @dataclass(frozen=True)
 class Plugin:
     name: str
-    provides: dict = field(default_factory=dict)  # "tracker"|"vcs"|"surface"|"agent"|"notifier" -> {impl: "mod:Class"}
+    provides: dict = field(default_factory=dict)  # "tracker"|"vcs"|"surface"|"agent"|"executor"|"notifier" -> {impl: "mod:Class"}
     commands: dict = field(default_factory=dict)  # cli word -> "mod:function" (argv) -> exit code
     effects: dict = field(default_factory=dict)  # (kind, target) -> "mod:function"; a target in `triggers` is its own
     guards: dict = field(default_factory=dict)  # guard fact -> "mod:function" (value, facts, tracker, ticket) -> bool
@@ -39,12 +39,13 @@ class Plugin:
 # turns on nothing.
 KNOWN = {name: f"factory_plugins.{name}" for name in (
     "comments", "notify", "notify_email", "github", "youtrack", "space", "air", "local", "claude", "codex", "junie", "pi",
-    "chart", "facts")}
+    "chart", "facts", "host")}
 # The plugin a system, surface, agent runner or development tool name turns on implicitly (a tool only through `use`).
 IMPLIED = {"tracker": {"github-issues": "github", "github": "github", "youtrack": "youtrack"},
            "vcs": {"github": "github", "space": "space"},
            "surface": {"air": "air", "local": "local"},
            "agent": {"claude": "claude", "claude-code": "claude", "codex": "codex", "junie": "junie", "pi": "pi"},
+           "executor": {"host": "host"},
            "tool": {"chart": "chart", "facts": "facts"}}
 LISTS = ("plugins", "modules")  # `modules:` is the ADR-0025 name of `plugins:`
 CATEGORIES = ("effect", "guard", "trigger", "outcome", "agent", "command", "config")

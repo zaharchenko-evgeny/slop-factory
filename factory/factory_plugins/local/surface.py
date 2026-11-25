@@ -62,6 +62,26 @@ def local_model(config, tier):
     return m["model"] if isinstance(m, dict) else m
 
 
+def role_executor(config, role, focus=None):
+    """The executor a role runs in on the local target (ADR-0029): its mode's, else the role's, else
+    `targets.local.executor`, else `host`."""
+    r = (config.get("roles") or {}).get(role) or {}
+    mode = ((r.get("modes") or {}).get(focus) or {}) if focus else {}
+    local = (config.get("targets") or {}).get("local") or {}
+    return mode.get("executor") or r.get("executor") or local.get("executor") or "host"
+
+
+def executor(config, name, run=subprocess.run):
+    """The executor (ports/executor.py) of instance `name`: `executors.<name>` (its `type` picks the plugin, else the
+    name does), built with the instance's other keys. ValueError for an unknown type."""
+    options = dict(((config.get("executors") or {}).get(name)) or {})
+    kind = options.pop("type", name)
+    cls = plugins.registry(config, use=(("executor", kind),)).impl("executor", kind)
+    if cls is None:
+        raise ValueError(plugins.impl_error(config, "executor", kind, f"executors.{name}"))
+    return cls(options, run=run) if kind == "host" else cls(options)
+
+
 def runner(harness, config=None):
     """The agent runner (ports/agent.py) of `harness`, from the runner plugin that provides it: running a role in a
     harness turns its plugin on (`claude-code` and `claude`: claude; `codex`, `junie`, `pi`). ValueError naming the
@@ -346,8 +366,11 @@ def run_event(entry, payload, state, config, graph, run):
     model = local_model(config, entry["tier"])
     harness = role_harness(config, node["role"], entry["focus"], entry["tier"])
     install_skills(run, node["role"], harness, trees[primary])
-    done = sh(run, runner(harness, config).command(prompt, model, write), cwd=trees[primary],
-              env={**os.environ, "FACTORY_TEAM": state["factory"]})
+    ex = executor(config, role_executor(config, node["role"], entry["focus"]), run)
+    if ex.isolated:
+        return f"executor failed: {ex.name} is not available yet"
+    done = ex.exec(None, runner(harness, config).command(prompt, model, write), cwd=trees[primary],
+                   env={**os.environ, "FACTORY_TEAM": state["factory"]}, timeout=node.get("timeout"))
     if done.returncode:
         return f"harness failed: {(done.stdout + done.stderr).strip()[-300:]}"
     if not write or not branch:

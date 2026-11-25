@@ -1188,6 +1188,7 @@ def to_project(defn):
         **({"comment_tag": f["comment_tag"]} if isinstance(f.get("comment_tag"), str) else {}),  # "" is no tag (#1366)
         **({"plugins": plugins.listed(f)} if plugins.listed(f) else {}),
         **({"surface": f["surface"]} if f.get("surface") else {}),  # where the nodes run (ADR-0026: air, local)
+        **({"executors": f["executors"]} if f.get("executors") else {}),  # where local agents run (ADR-0029)
     }
     return descriptor, {"format": 2, "adapters": {"ticket": (f.get("tracker") or {}).get("adapter", "github-issues"),
                                                   "pr": "github"},

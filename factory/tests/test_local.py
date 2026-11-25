@@ -306,6 +306,28 @@ class RunLocalTest(unittest.TestCase):
         self.assertEqual(local.role_harness(config, "router"), "codex")
         self.assertEqual(local.role_harness({}, "router"), "claude-code")
 
+    def test_role_executor_mode_then_role_then_target_then_host(self):
+        config = {"targets": {"local": {"executor": "box"}},
+                  "roles": {"reviewer": {"executor": "sbx", "modes": {"full": {"executor": "none"}}}, "router": {}}}
+        self.assertEqual(local.role_executor(config, "reviewer", "full"), "none")
+        self.assertEqual(local.role_executor(config, "reviewer", "behaviour"), "sbx")
+        self.assertEqual(local.role_executor(config, "router"), "box")
+        self.assertEqual(local.role_executor({}, "router"), "host")
+
+    def test_host_executor_runs_argv_and_a_timeout_is_exit_124(self):
+        import subprocess
+        ex = local.executor({}, "host", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "out", ""))
+        self.assertEqual((ex.isolated, ex.exec(None, ["x"]).stdout), (False, "out"))
+
+        def slow(argv, **kw):
+            raise subprocess.TimeoutExpired(argv, kw["timeout"])
+        done = local.executor({"executors": {"h": {"type": "host", "timeout": 5}}}, "h", slow).exec(None, ["x"])
+        self.assertEqual(done.returncode, 124)
+
+    def test_an_unknown_executor_names_the_known_ones(self):
+        with self.assertRaisesRegex(ValueError, "unknown-executor.*host"):
+            local.executor({}, "nope")
+
     def test_local_models_prefer_the_local_target(self):
         self.assertEqual(local.local_models({"targets": {"local": {"models": {"mid": "a"}}}, "models": {"mid": "b"}}),
                          {"mid": "a"})
