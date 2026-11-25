@@ -1,5 +1,5 @@
 # ADR-0029: Executors, and named local surfaces
-Status: proposed. Amends ADR-0018 (the harness is a local setting) and ADR-0026 (a new `executor` slot).
+Status: implemented locally (branch `ez/surfaces-executors`), not yet through the factory. Amends ADR-0018 (the harness is a local setting) and ADR-0026 (a new `executor` slot).
 Context: the local surface runs every agent on the host, in worktrees under `.factory/worktrees`, and a factory has
 one `surface:`. A team cannot choose where an agent runs (host, container, microVM) or deploy several surfaces.
 Decision:
@@ -33,3 +33,11 @@ Decision:
 Out of scope: `opencode`, a proxy for `docker` allowlists, a clone workspace on `host`, building images for `sbx`.
 Slices: surfaces and the machine override; the executor port with `host` (done); `docker`; `docker-sandbox`; doctor
 probes and the Air validation.
+Implementation notes:
+- `surfaces.py` holds the instances, the selection, the machine override (`config.load` applies `.factory/local.yaml`)
+  and the validation (`factory validate` through `deploy.output_errors`).
+- `run_isolated` in `factory_plugins/local/surface.py` is the sandbox run; `run_event` takes it when the role's
+  executor is isolated. `deploy --surface` probes each executor and runs `<cli> --version` in one sandbox per harness.
+- shortcut: `docker-sandbox` passes secrets as `sbx exec -e`, not `sbx secret`: which credentials `sbx` injects for
+  GitHub is unconfirmed. `reconcile` for it removes every `factory-*` sandbox (`sbx ls` shows no age).
+- Not run against a real Docker or `sbx`: the tests use a fake `run` and check the commands.

@@ -6,6 +6,7 @@ from ports.agent import probe_cli
 
 class Runner:
     name, cli, skill_dir = "claude-code", "claude", ".claude/skills"
+    env, auth_files = ("ANTHROPIC_API_KEY",), ("~/.claude", "~/.claude.json")  # what an isolated executor passes in (ADR-0029)
 
     def command(self, prompt, model, write):
         """Read-only nodes get no edit tools."""

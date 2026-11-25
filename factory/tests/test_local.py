@@ -183,6 +183,16 @@ class GitHub:
         self.push_code, self.gh_down = push_code, gh_down
 
     def kind(self, argv):
+        if argv[:2] == ["docker", "exec"]:
+            inner = argv[argv.index("--") + 1:] if "--" in argv else argv
+            if "begin" in argv:
+                return "begin"
+            if any(a in ("claude", "codex", "pi") for a in argv):
+                return "harness"
+        if argv[:2] == ["docker", "run"]:
+            return "prepare"
+        if argv[:3] == ["docker", "rm", "-f"]:
+            return "teardown"
         if argv[:2] == ["gh", "pr"] and argv[2] == "create":
             return "pr-create"
         if argv[0] == "git" and "push" in argv:
@@ -217,7 +227,7 @@ class GitHub:
             n = int(argv[3].split("/")[-2])
             labels = {**{k: v for k, v in self.issues.items()}, **{k: v for k, v in self.prs.items()}}
             return rows([{"id": 100 + n, "name": label} for label, items in labels.items() if any(i["number"] == n for i in items)])
-        if argv[0] == "uv" and "begin" in argv:
+        if (argv[0] == "uv" or argv[:2] == ["docker", "exec"]) and "begin" in argv:
             return subprocess.CompletedProcess(argv, self.begin_code, json.dumps(
                 {"go": True, "branch": self.branch, "checkouts": [], "context": {"title": "Add x"}}), "")
         if argv[0] == "git" and "rev-list" in argv:
@@ -579,7 +589,67 @@ class SurfacesTest(unittest.TestCase):
         self.assertEqual(cfg["surfaces"]["laptop"]["executor"], "box")
         self.assertNotIn("harness", cfg["surfaces"]["air"])
 
+    def test_factory_validate_reports_surface_errors(self):
+        import deploy
+        before = cfg.team_root()
+        cfg.set_team(FIXTURE)
+        try:
+            config = {**cfg.load(), "surfaces": {"air": {"type": "air", "executor": "box"}}}
+            errs = deploy.output_errors(nodes.load(), config)
+        finally:
+            cfg.set_team(before)
+        self.assertIn("air-surface-has-executor", " ".join(errs))
+
     def test_workers_default_by_executor(self):
         self.assertEqual(local.workers({"surfaces": {"local": {"type": "local"}}}), 1)
         self.assertEqual(local.workers({"executors": {"b": {"type": "docker"}}, "surfaces": {"local": {"type": "local", "executor": "b"}}}), 4)
         self.assertEqual(local.workers({"surfaces": {"local": {"type": "local", "executor": "host", "max_parallel": 1}}}), 1)
+
+
+class IsolatedRunTest(RunLocalTest):
+    """A node run in a `docker` executor: nothing mounted, the workspace built inside, the host pushes the bundle."""
+    for _n in [n for n in dir(RunLocalTest) if n.startswith("test_")]:
+        locals()[_n] = None  # not the host tests again
+
+    def setUp(self):
+        super().setUp()
+        real = cfg.load
+        load = lambda: {**real(), "executors": {"box": {"type": "docker", "image": "img", "secrets": {"GITHUB_TOKEN": "FACTORY_TEST_TOKEN"},
+                                                        "network": "none"}},
+                        "targets": {**real()["targets"], "local": {**real()["targets"]["local"], "executor": "box"}}}
+        patch = unittest.mock.patch.object(cfg, "load", load)
+        patch.start()
+        self.addCleanup(patch.stop)
+        env = unittest.mock.patch.dict(os.environ, {"FACTORY_TEST_TOKEN": "tok-123"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_the_run_happens_in_the_container_and_the_host_pushes(self):
+        gh = GitHub(issues={"factory:implement-medium": [{"number": 7}]})
+        code, out = self.run_local(gh)
+        self.assertEqual(out, [{"ran": "implement-medium", "event": "labeled:107", "result": "pushed"}])
+        kinds = [k for k in gh.kinds() if k in ("prepare", "begin", "harness", "push", "pr-create", "teardown")]
+        self.assertEqual(kinds, ["prepare", "begin", "harness", "push", "pr-create", "teardown"])
+        prepare = next(a for k, a in gh.calls if k == "prepare")
+        self.assertNotIn("-v", prepare)  # no host mount
+        self.assertEqual(prepare[prepare.index("--network") + 1], "none")
+        harness = next(a for k, a in gh.calls if k == "harness")
+        self.assertNotIn("tok-123", " ".join(harness))  # the token is not on any command line
+        self.assertIn("GITHUB_TOKEN", harness)
+        push = next(a for k, a in gh.calls if k == "push")
+        self.assertIn("refs/factory/ez/7-add-x:refs/heads/ez/7-add-x", push)
+        self.assertTrue(Path(".factory/runs").is_dir())
+
+    def test_no_token_is_a_config_error_and_starts_no_container(self):
+        with unittest.mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("FACTORY_TEST_TOKEN")
+            gh = GitHub(issues={"factory:implement-medium": [{"number": 7}]})
+            _, out = self.run_local(gh)
+        self.assertTrue(out[0]["result"].startswith("config: executor docker has no GITHUB_TOKEN"), out)
+        self.assertNotIn("prepare", gh.kinds())
+
+    def test_no_go_still_tears_the_container_down(self):
+        gh = GitHub(issues={"factory:implement-medium": [{"number": 7}]}, begin_code=10)
+        self.assertEqual(self.run_local(gh)[1][0]["result"], "no-go")
+        self.assertEqual(gh.kinds().count("teardown"), 1)
+        self.assertNotIn("harness", gh.kinds())

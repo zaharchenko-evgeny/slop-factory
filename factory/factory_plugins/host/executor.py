@@ -21,6 +21,9 @@ class Executor:
             return subprocess.CompletedProcess(argv, 124, (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else e.stdout or "",
                                                f"timed out after {timeout}s")
 
+    def put(self, handle, src, dst):
+        """The host's files are already on the host."""
+
     def collect(self, handle, paths, dest):
         """The host's run files are already on the host."""
 

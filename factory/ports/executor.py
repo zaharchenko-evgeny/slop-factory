@@ -22,6 +22,9 @@ class Executor(Protocol):
         """Run argv to completion: a `subprocess.CompletedProcess` with str output. A timeout kills the run and
         returns exit code 124."""
 
+    def put(self, handle, src, dst: str) -> None:
+        """Copy the host file or directory `src` into the sandbox at the absolute path `dst`, read-only use."""
+
     def collect(self, handle, paths: list[str], dest) -> None:
         """Copy the sandbox's run files and logs to the host directory `dest`; also after a failure or timeout."""
 

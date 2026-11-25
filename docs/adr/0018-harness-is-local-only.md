@@ -1,7 +1,8 @@
 # ADR-0018: A harness is a local-target setting; Air runs its agents itself
 
 Status: accepted, decided by the operator on 5 November 2026 (#523). Refines
-ADR-0017's local target.
+ADR-0017's local target. Amended by [ADR-0029](0029-executors-and-surfaces.md): the harness is also a
+surface-instance setting, and an executor says where it runs.
 
 Context: every role's `setup.sh` listed `pi` in `need_tools`, so each Air
 startup reported the role's tools as missing, although Air runs the agent and

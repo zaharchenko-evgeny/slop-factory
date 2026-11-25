@@ -23,6 +23,8 @@ class AgentRunner(Protocol):
     name: str  # the harness name (`claude-code`, `codex`, `junie`, `pi`)
     cli: str  # the binary on PATH
     skill_dir: str  # the project skill directory, relative to the worktree
+    env: tuple  # the host variables an isolated executor passes in by name (API keys)
+    auth_files: tuple  # login files an executor copies in only when its instance lists `auth_files` (ADR-0029)
 
     def command(self, prompt: str, model: str, write: bool) -> list[str]:
         """The argv of one headless run: `write` nodes get edit tools, read-only nodes none."""
