@@ -520,3 +520,66 @@ class PollTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SurfacesTest(unittest.TestCase):
+    CONFIG = {"executors": {"box": {"type": "docker"}},
+              "surfaces": {"air": {"type": "air"}, "laptop": {"type": "local", "executor": "box", "harness": "codex", "nodes": ["implement"]},
+                           "plain": {"type": "local"}},
+              "targets": {"local": {"harness": "pi"}}}
+
+    def test_named_instance_settings_and_aliases(self):
+        import surfaces
+        inst = surfaces.instances(self.CONFIG)
+        self.assertEqual(inst["laptop"]["type"], "local")
+        self.assertEqual(surfaces.instances({"targets": {"local": {"harness": "pi"}}})["local"], {"type": "local", "harness": "pi"})
+        self.assertEqual(local.role_harness(self.CONFIG, "dev", surface="laptop"), "codex")
+        self.assertEqual(local.role_executor(self.CONFIG, "dev", surface="laptop"), "box")
+        self.assertEqual(local.role_executor(self.CONFIG, "dev", surface="plain"), "host")
+
+    def test_selection_order_flag_then_surface_then_air(self):
+        import surfaces
+        self.assertEqual(surfaces.selected({"surface": ["a", "b"]}, ["x"]), ["x"])
+        self.assertEqual(surfaces.selected({"surface": ["a", "b"]}), ["a", "b"])
+        self.assertEqual(surfaces.selected({"surface": "local"}), ["local"])
+        self.assertEqual(surfaces.selected({"targets": {"air": {}}}), ["air"])
+        self.assertEqual(surfaces.selected({}), [])
+
+    def test_validation(self):
+        import surfaces
+        bad = {"executors": {}, "surfaces": {"a": {"type": "air", "harness": "pi"},
+                                             "l": {"type": "local", "executor": "nope", "max_parallel": 0},
+                                             "h": {"type": "local", "max_parallel": 3}}}
+        got = " | ".join(surfaces.errors(bad))
+        for code in ("air-surface-has-harness", "unknown-executor", "bad-max-parallel", "host-parallel"):
+            self.assertIn(code, got)
+        self.assertEqual(surfaces.errors(self.CONFIG), [])
+
+    def test_a_node_on_two_surfaces_is_refused_unless_filtered(self):
+        import surfaces
+        nodes = {"nodes": {"implement": {"role": "dev"}, "review": {"role": "rev"}}}
+        cfg = {**self.CONFIG, "surface": ["air", "laptop"]}
+        self.assertEqual(surfaces.errors(cfg, nodes), ["node-on-two-surfaces: nodes.implement: air, laptop"])
+        self.assertEqual(surfaces.errors(cfg, {"nodes": {"review": {"role": "rev"}}}), [])
+
+    def test_nodes_filter_limits_the_plan(self):
+        nodes = {"nodes": {n: {"role": "dev", "triggers": ["label ready"], "output": "read-only"} for n in ("implement", "review")}}
+        cfg = {"surfaces": {"laptop": {"type": "local", "nodes": ["implement"]}}, "roles": {"dev": {}}}
+        names = {e["node"] for e in local.plan_local(nodes, cfg, "laptop")}
+        self.assertEqual(names, {"implement"})
+
+    def test_machine_override_merges_by_name_and_spares_air(self):
+        import tempfile, pathlib, surfaces
+        with tempfile.TemporaryDirectory() as d:
+            f = pathlib.Path(d) / "local.yaml"
+            f.write_text("executors:\n  box: {image: x}\nsurfaces:\n  laptop: {harness: pi}\n  air: {harness: pi}\n")
+            cfg = surfaces.apply_override({"executors": {"box": {"type": "docker"}}, "surfaces": dict(self.CONFIG["surfaces"])}, f)
+        self.assertEqual(cfg["executors"]["box"], {"type": "docker", "image": "x"})
+        self.assertEqual(cfg["surfaces"]["laptop"]["harness"], "pi")
+        self.assertEqual(cfg["surfaces"]["laptop"]["executor"], "box")
+        self.assertNotIn("harness", cfg["surfaces"]["air"])
+
+    def test_workers_default_by_executor(self):
+        self.assertEqual(local.workers({"surfaces": {"local": {"type": "local"}}}), 1)
+        self.assertEqual(local.workers({"executors": {"b": {"type": "docker"}}, "surfaces": {"local": {"type": "local", "executor": "b"}}}), 4)
+        self.assertEqual(local.workers({"surfaces": {"local": {"type": "local", "executor": "host", "max_parallel": 1}}}), 1)

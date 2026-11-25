@@ -106,7 +106,8 @@ def _load():
     import definition
     if not definition.present(root):
         raise SystemExit(f"factory: no factory definition at {root} (factory.yaml and workflow.yaml, ADR-0021)")
-    return merge(defaults, definition.config(definition.load(root)))
+    import surfaces
+    return surfaces.apply_override(merge(defaults, definition.config(definition.load(root))))
 
 
 def owner(cfg=None):

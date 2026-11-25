@@ -25,6 +25,7 @@ import definition
 import plugins
 import project as project_mod
 import scopes as scopes_mod
+import surfaces
 import vocab
 from ports.system import TrackerSchema
 
@@ -593,7 +594,8 @@ def labels(nodes: dict, config: dict) -> list[str]:
 
 def surface_name(config: dict) -> str | None:
     """The surface the team deploys to (ADR-0026): `surface:`, else `air` when `targets.air` is set, else None."""
-    return config.get("surface") or ("air" if (config.get("targets") or {}).get("air") else None)
+    sel = surfaces.types(config)
+    return sel[0] if sel else None
 
 
 def output_errors(nodes: dict, config: dict) -> list[str]:
@@ -602,12 +604,12 @@ def output_errors(nodes: dict, config: dict) -> list[str]:
     once `targets.air` turns on `air`. No surface: no output is checked."""
     errs = [e for hook in plugins.registry(config).hook("deploy.errors") for e in hook(nodes, config)]
     name = surface_name(config)
-    return errs + (_output_errors(nodes, config, name) if name else [])
+    return errs + surfaces.errors(config, nodes) + (_output_errors(nodes, config, name) if name else [])
 
 
 def _output_errors(nodes: dict, config: dict, name: str) -> list[str]:
     registry = plugins.registry(config, use=(("surface", name),))
-    names = [name] if config.get("surface") else registry.impls("surface")
+    names = surfaces.types(config) if config.get("surface") or config.get("surfaces") else registry.impls("surface")
     if not (classes := [cls for n in names if (cls := registry.impl("surface", n))]):
         return [plugins.impl_error(config, "surface", name, "surface")]
     supported = set().union(*(cls().outputs() for cls in classes))
@@ -624,16 +626,50 @@ def main(argv: list[str]) -> int:
     """`factory deploy`: the `deploy --target <surface>` command of the surface `--target` names, else of the team's
     (`surface_name`; `air` when the config names none, or cannot be read). `plan` is Air's: only it renders a plan."""
     argv = config_mod.pop_team(argv)
-    if argv[:1] == ["--target"] and len(argv) > 1 and argv[1] in plugins.IMPLIED["surface"]:
-        surface, argv = argv[1], argv[2:]
-    elif argv[:1] in (["plan"], ["--target"]):  # Air's usage names any other target
-        surface = "air"
-    else:
+    names = None
+    for flag in ("--surface", "--target"):  # `--target` is the deprecated name of `--surface`
+        if argv[:1] == [flag] and len(argv) > 1 and (flag == "--surface" or argv[1] in plugins.IMPLIED["surface"]
+                                                      or "," in argv[1]):
+            names, argv = argv[1].split(","), argv[2:]
+            break
+    if names is None and argv[:1] in (["plan"], ["--target"]):  # Air's usage names any other target
+        names = ["air"]
+    if names is None:
         try:
             config = config_mod.load()
         except (Exception, SystemExit):  # the surface's own deploy reports it, as before
             config = {}
-        surface = surface_name(config) or "air"
+        names = surfaces.selected(config) or ["air"]
+    if len(names) > 1 or names[0] not in plugins.IMPLIED["surface"]:
+        try:
+            config = config_mod.load()
+        except (Exception, SystemExit):
+            config = {}
+        errs = surfaces.errors(config, team_nodes(), names)
+        for err in errs:
+            print(err, file=sys.stderr)
+        if errs:
+            return 1
+        code = 0
+        for name in names:
+            kind = (surfaces.instances(config).get(name) or {"type": name})["type"]
+            code = main_one(kind, name, argv) or code
+        return code
+    return main_one(names[0], names[0], argv)
+
+
+def team_nodes():
+    try:
+        import nodes as nodes_mod
+        return nodes_mod.load()
+    except (Exception, SystemExit):
+        return None
+
+
+def main_one(surface, name, argv):
+    """Deploy surface instance `name` of plugin type `surface`; a local instance other than `local` gets `--surface`."""
+    if surface == "local" and name != "local":
+        argv = ["--surface", name, *argv]
     command = plugins.registry({}, use=(("surface", surface),)).command(f"deploy --target {surface}")
     if command is None:
         print(f"deploy: no plugin deploys surface {surface}", file=sys.stderr)

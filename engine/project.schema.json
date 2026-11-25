@@ -180,7 +180,7 @@
     "comment_tag": {"type": "string", "description": "The tag that starts every comment, review and PR body the factory writes, on its own line (#1366). Unset: `[factory]`. Blank: no tag, the text starts at the first line."},
     "plugins": {"type": "array", "items": {"enum": ["comments", "notify", "notify_email", "github", "youtrack", "space", "air", "local", "claude", "codex", "junie", "pi", "host"]}, "description": "Engine plugins to turn on (ADR-0026): `comments` reacts to comments (mentions, asks, the comment node); `notify` sends the `notify` effect and adds `factory notify test`; `notify_email` is its email channel (and turns on `notify`). Systems, surfaces and agent runners turn on implicitly."},
     "modules": {"type": "array", "items": {"enum": ["comments", "notify", "notify_email", "github", "youtrack", "space", "air", "local", "claude", "codex", "junie", "pi", "host"]}, "description": "The ADR-0025 name of `plugins`."},
-    "surface": {"type": "string", "description": "Where the nodes run (ADR-0026): `air` (Air automations, the default when `targets.air` is set) or `local` (ADR-0017). `factory deploy` with no `--target` deploys to it, and `factory validate` checks every node `output:` against what it supports."},
+    "surface": {"type": ["string", "array"], "items": {"type": "string"}, "description": "Where the nodes run (ADR-0026): `air` (Air automations, the default when `targets.air` is set) or `local` (ADR-0017). `factory deploy` with no `--target` deploys to it, and `factory validate` checks every node `output:` against what it supports."},
     "notify": {
       "type": "object",
       "properties": {
@@ -208,6 +208,7 @@
         }
       }
     },
+    "surfaces": {"type": "object", "additionalProperties": {"type": "object", "properties": {"type": {"type": "string"}, "harness": {"type": "string"}, "executor": {"type": "string"}, "nodes": {"type": "array", "items": {"type": "string"}}, "max_parallel": {"type": "integer", "minimum": 1}}}, "description": "Named surface instances (ADR-0029): `type` is the surface plugin (`air`, `local`); `harness`, `executor`, `nodes` (a filter) and `max_parallel` are local-only."},
     "executors": {"type": "object", "additionalProperties": {"type": "object", "required": [], "properties": {"type": {"type": "string"}}}, "description": "Named executor instances (ADR-0029): where a local node's agent runs. `type` picks the executor plugin (`host`, `docker`, `docker-sandbox`); the other keys are that plugin's options."},
     "defaults": {"type": "object"},
     "models": {"type": "object", "additionalProperties": {"type": "string"}},

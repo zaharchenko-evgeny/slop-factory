@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,39 +36,48 @@ import config as config_mod  # noqa: E402
 import deploy as deploy_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 import plugins  # noqa: E402
+import surfaces  # noqa: E402
 from gate_port import ticket_from_ref  # noqa: E402
 from ports.system import Query  # noqa: E402
 
 
-def role_harness(config, role, focus=None, tier=None):
+SURFACE = "local"  # the surface instance this process serves (`--surface NAME`, ADR-0029)
+
+
+def settings(config, surface=None):
+    """The instance of the local surface `surface` (default: this process's): `surfaces.<name>`, else `targets.local`."""
+    return surfaces.instances(config).get(surface or SURFACE) or {}
+
+
+def role_harness(config, role, focus=None, tier=None, surface=None):
     """The harness a role runs in on the local target: its mode's, else the role's, else the `harness` of its tier's
     model alias (`models.<alias>: {harness, model}`), else `targets.local.harness`, else claude-code.
     Air ignores it: there the platform runs the agent with `targets.air.models`."""
     r = (config.get("roles") or {}).get(role) or {}
     mode = ((r.get("modes") or {}).get(focus) or {}) if focus else {}
-    local = (config.get("targets") or {}).get("local") or {}
-    alias = local_models(config).get(tier) if tier else None
+    local = settings(config, surface)
+    alias = local_models(config, surface).get(tier) if tier else None
     return (mode.get("harness") or r.get("harness") or (alias.get("harness") if isinstance(alias, dict) else None)
             or local.get("harness") or "claude-code")
 
 
-def local_models(config):
-    """Tier -> model on the local target: `targets.local.models` (the older top-level `models` still works)."""
-    return ((config.get("targets") or {}).get("local") or {}).get("models") or config.get("models") or {}
+def local_models(config, surface=None):
+    """Tier -> model on the local target: the instance's `models` (the older top-level `models` still works)."""
+    return settings(config, surface).get("models") or config.get("models") or {}
 
 
-def local_model(config, tier):
+def local_model(config, tier, surface=None):
     """The model of `tier` on the local target: a `provider/model` string, or the `model` of a `{harness, model}` alias."""
-    m = local_models(config)[tier]
+    m = local_models(config, surface)[tier]
     return m["model"] if isinstance(m, dict) else m
 
 
-def role_executor(config, role, focus=None):
+def role_executor(config, role, focus=None, surface=None):
     """The executor a role runs in on the local target (ADR-0029): its mode's, else the role's, else
     `targets.local.executor`, else `host`."""
     r = (config.get("roles") or {}).get(role) or {}
     mode = ((r.get("modes") or {}).get(focus) or {}) if focus else {}
-    local = (config.get("targets") or {}).get("local") or {}
+    local = settings(config, surface)
     return mode.get("executor") or r.get("executor") or local.get("executor") or "host"
 
 
@@ -98,12 +108,36 @@ FACTORY = ["uv", "run", "--quiet", str(ENGINE / "cli.py")]
 WRITE_OUTPUTS = ("create-pr", "push-to-source")
 
 
-def plan_local(nodes, config):
+def use_surface(name):
+    """Serve the local surface instance `name`: its own state, seen-events and tries files (`local` keeps the old ones)."""
+    global SURFACE, STATE, SEEN, TRIES_FILE
+    SURFACE = name
+    if name != "local":
+        STATE, SEEN, TRIES_FILE = (Path(f".factory/local-{name}.json"), Path(f".factory/local/{name}-seen.json"),
+                                   Path(f".factory/local/{name}-tries.json"))
+
+
+def pop_surface(argv):
+    """`--surface NAME` out of argv: (argv without it, NAME or `local`). The surface is then in use."""
+    if "--surface" in argv and argv.index("--surface") + 1 < len(argv):
+        i = argv.index("--surface")
+        name, argv = argv[i + 1], argv[:i] + argv[i + 2:]
+        use_surface(name)
+    return argv
+
+
+def workers(config):
+    """Runs at once: the instance's `max_parallel`, else 4 when its executor is isolated, else 1."""
+    ex = settings(config).get("executor", "host")
+    return settings(config).get("max_parallel") or (1 if surfaces.executor_type(config, ex) == "host" else 4)
+
+
+def plan_local(nodes, config, surface=None):
     """Each automation the local loop serves, named and triggered as on Air; a manual-only node is not. A scheduled node
     carries its `schedules` (names) beside its event `triggers`. A node woken only by webhooks is not served."""
     out = []
     for name, n in nodes["nodes"].items():
-        if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
+        if n.get("enabled") is False or n["role"] == "human" or n.get("runner") or not surfaces.serves(settings(config, surface), name):
             continue
         events = [t for t in n["triggers"] if not str(t).startswith(("schedule ", "webhook ")) and str(t) != "manual"]
         scheds = [str(t)[9:] for t in n["triggers"] if str(t).startswith("schedule ")]
@@ -175,7 +209,7 @@ def same_repository(url, origin):
 
 def checks(config, run=subprocess.run, which=shutil.which):
     """(missing items, the state `--apply` records)."""
-    local = (config.get("targets") or {}).get("local") or {}
+    local = settings(config)
     harnesses = sorted({role_harness(config, e["role"], e["focus"], e["tier"]) for e in plan_local(nodes_mod.load(), config)
                         if e["role"] != "script"} or {role_harness(config, None)})
     team = config_mod.team_root()
@@ -211,6 +245,7 @@ def checks(config, run=subprocess.run, which=shutil.which):
 
 
 def deploy(argv, run=subprocess.run, which=shutil.which):
+    argv = pop_surface(argv)
     if set(argv) - {"--apply", "--dry-run"}:
         print(__doc__)
         return 2
@@ -407,6 +442,7 @@ def save(path, value):
 
 
 def main(argv, run=subprocess.run, sleep=time.sleep, now=lambda: datetime.now(timezone.utc)):
+    argv = pop_surface(argv)
     if "--local" not in argv or set(argv) - {"--local", "--once", "--dry-run"}:
         print(__doc__)
         return 2
@@ -427,6 +463,7 @@ def main(argv, run=subprocess.run, sleep=time.sleep, now=lambda: datetime.now(ti
             sleep(state.get("poll_seconds", 60))
             continue
         events += due_schedules(plan, graph.get("schedules") or {}, now())
+        todo = []
         for event_id, entry, payload in events:
             key = f"{entry['automation']}:{event_id}"
             if key in seen:
@@ -437,10 +474,18 @@ def main(argv, run=subprocess.run, sleep=time.sleep, now=lambda: datetime.now(ti
             if "--dry-run" in argv:
                 print(json.dumps({"would_run": entry["automation"], "event": event_id}))
                 continue
+            todo.append((event_id, entry, payload, key))
+
+        def one(item):
             try:
-                result = run_event(entry, payload, state, config, graph, run)
+                return run_event(item[1], item[2], state, config, graph, run)
             except (RuntimeError, ValueError, KeyError, OSError) as e:
-                result = f"error: {e}"[-300:]
+                return f"error: {e}"[-300:]
+        n = workers(config)
+        with ThreadPoolExecutor(max_workers=n) as pool:  # shortcut: a batch waits for its slowest run, then the next poll
+            results = list(pool.map(one, todo)) if n > 1 else None
+        for i, (event_id, entry, payload, key) in enumerate(todo):
+            result = results[i] if results is not None else one((event_id, entry, payload, key))
             print(json.dumps({"ran": entry["automation"], "event": event_id, "result": result}), flush=True)
             tries[key] = tries.pop(key, 0) + 1
             if result.startswith(RETRIED) and tries[key] < TRIES:

@@ -1174,7 +1174,8 @@ def to_project(defn):
         "commands": commands,
         "branch_pattern": dset.get("branch_pattern"),
         "commit_prefix": dset.get("commit_prefix"),
-        "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models},
+        "targets": {**({"local": f["targets"]["local"]} if isinstance((f.get("targets") or {}).get("local"), dict) else {}),
+                    "air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models},
                            "mcp_connectors": list(air.get("mcp_connectors") or AIR_CONNECTORS),
                            **({"project_id": air["project_id"]} if air.get("project_id") else {})}},
         "roles": roles,
@@ -1188,6 +1189,7 @@ def to_project(defn):
         **({"comment_tag": f["comment_tag"]} if isinstance(f.get("comment_tag"), str) else {}),  # "" is no tag (#1366)
         **({"plugins": plugins.listed(f)} if plugins.listed(f) else {}),
         **({"surface": f["surface"]} if f.get("surface") else {}),  # where the nodes run (ADR-0026: air, local)
+        **({"surfaces": f["surfaces"]} if f.get("surfaces") else {}),  # named surface instances (ADR-0029)
         **({"executors": f["executors"]} if f.get("executors") else {}),  # where local agents run (ADR-0029)
     }
     return descriptor, {"format": 2, "adapters": {"ticket": (f.get("tracker") or {}).get("adapter", "github-issues"),

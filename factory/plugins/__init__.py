@@ -127,7 +127,9 @@ def implied(config):
     config = config or {}
     names = [("tracker", _named(config.get("tracker")) or "github-issues"),
              ("vcs", _named(config.get("vcs") or config.get("code_host")) or "github"),
-             ("surface", config.get("surface"))]
+             *(("surface", n) for n in (config.get("surface") if isinstance(config.get("surface"), list) else [config.get("surface")])),
+             *(("surface", v.get("type", k)) for k, v in (config.get("surfaces") or {}).items() if isinstance(v, dict)),
+             *(("executor", v.get("type", k)) for k, v in (config.get("executors") or {}).items() if isinstance(v, dict))]
     envs = config.get("environments")
     names += [("vcs", _named(e.get("vcs"))) for e in (envs.values() if isinstance(envs, dict) else [])
               if isinstance(e, dict) and e.get("vcs")]
