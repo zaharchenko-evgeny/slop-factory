@@ -73,8 +73,20 @@ def errors(config, nodes=None, names=None):
         mp = i.get("max_parallel", 1)
         if not isinstance(mp, int) or isinstance(mp, bool) or mp < 1:
             errs.append(f"bad-max-parallel: surfaces.{name}: {mp!r} must be a positive integer")
-        elif mp > 1 and executor_type(config, ex) == "host":
-            errs.append(f"host-parallel: surfaces.{name}: max_parallel {mp} needs an isolated executor, `host` runs one at a time")
+        elif mp > 1:
+            if executor_type(config, ex) == "host":
+                errs.append(f"host-parallel: surfaces.{name}: max_parallel {mp} needs an isolated executor, `host` runs one at a time")
+            else:
+                for role, rcfg in (config.get("roles") or {}).items():
+                    if not isinstance(rcfg, dict):
+                        continue
+                    rex = rcfg.get("executor")
+                    if rex and executor_type(config, rex) == "host":
+                        errs.append(f"host-parallel: surfaces.{name}: max_parallel {mp} conflicts with roles.{role}.executor `{rex}` (`host` runs one at a time)")
+                    for mode, mcfg in (rcfg.get("modes") or {}).items():
+                        mex = (mcfg or {}).get("executor") if isinstance(mcfg, dict) else None
+                        if mex and executor_type(config, mex) == "host":
+                            errs.append(f"host-parallel: surfaces.{name}: max_parallel {mp} conflicts with roles.{role}.modes.{mode}.executor `{mex}` (`host` runs one at a time)")
     sel = selected(config, names)
     errs += [f"unknown-surface: {n}: no `surfaces.{n}` or `targets.{n}`" for n in sel if n not in inst and n not in ("air", "local")]
     if nodes:

@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
-"""The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, contracts (operator-only), chart, ui, validate, setup, doctor.
+"""The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, start, stop, contracts (operator-only), chart, ui, validate, setup, doctor.
 
 Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` works as before.
        factory begin <automation> --issue N | --pr N | [payload file]   (payload on stdin by default; exit 10: the node must not act)
@@ -21,7 +21,8 @@ Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` wo
        factory sweep --main ...                    (the gate's sweep from main's graph)
        factory ci-sync [--dry-run]                 (the CI labels of the project repositories' factory PRs; reconcile runs it)
        factory ui --team DIR [--port N] [--no-open]  (the read-only progress UI on 127.0.0.1; setup never starts it)
-       factory deploy --target local [--apply] | factory run --local [--once] [--dry-run]   (the local target, ADR-0017)
+       factory deploy --surface NAME [--apply] | factory start [--surface NAME] | factory stop [--surface NAME]
+       factory run --local [--surface NAME] [--once] [--dry-run]   (the local target, ADR-0017, ADR-0029)
 """
 import argparse
 import contextlib
@@ -98,6 +99,7 @@ def begin(argv, team=None):
     p.add_argument("--issue", type=ticket_ref)  # N, owner/repo#N, or a YouTrack id PROJECT-N (#1319)
     p.add_argument("--pr", type=int)
     p.add_argument("--main", action="store_true")
+    p.add_argument("--check-only", action="store_true")  # read-only pre-check: writes no `.factory/begin.json`
     p.add_argument("--tracker")  # tests: a memory tracker
     a = p.parse_args(argv)
     # ADR-0021: the installed `factory` is the engine's main, never the pull request's code: no main worktree.
@@ -137,7 +139,7 @@ def begin(argv, team=None):
         code = run_gate(engine, ["check", "--node", state["node"], "--event", state["event"], *gate_args(state)],
                         str(config.team_root()))
     print(out.getvalue(), end="")
-    if code == 0:
+    if code == 0 and not a.check_only:
         checked = json.loads(out.getvalue())
         state["handoff_path"] = checked["handoff_path"]
         state["ticket"] = checked.get("ticket")  # for the `end failed` comment (#997)
@@ -522,6 +524,8 @@ def _main(argv):
         return surface_command("local", "run")(rest)
     if cmd == "deploy":
         return deploy.main(rest)
+    if cmd in ("start", "stop"):
+        return deploy.lifecycle(cmd, rest)
     if cmd == "contracts":
         return surface_command("air", "contracts")(rest)
     if cmd == "chart":

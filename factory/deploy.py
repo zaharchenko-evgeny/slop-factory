@@ -666,6 +666,43 @@ def team_nodes():
         return None
 
 
+def lifecycle(action: str, argv: list[str]) -> int:
+    """`factory start` / `factory stop`: enable/disable Air automations, or start/stop local surface loops."""
+    argv = config_mod.pop_team(list(argv))
+    names = None
+    for flag in ("--surface", "--target"):
+        if flag in argv:
+            i = argv.index(flag)
+            if i + 1 >= len(argv):
+                print(f"{action}: {flag} needs a surface name", file=sys.stderr)
+                return 2
+            names = argv[i + 1].split(",")
+            argv = argv[:i] + argv[i + 2:]
+            break
+    try:
+        config = config_mod.load()
+    except (Exception, SystemExit):
+        config = {}
+    if names is None:
+        names = surfaces.selected(config) or ["air"]
+    errs = surfaces.errors(config, team_nodes(), names)
+    for err in errs:
+        print(err, file=sys.stderr)
+    if errs:
+        return 1
+    code = 0
+    inst = surfaces.instances(config)
+    for name in names:
+        kind = (inst.get(name) or {"type": name})["type"]
+        surface_argv = ["--surface", name, *argv] if name != kind else list(argv)
+        command = plugins.registry({}, use=(("surface", kind),)).command(f"{action} --surface {kind}")
+        if command is None:
+            print(f"{action}: surface {kind} does not support `{action}`", file=sys.stderr)
+            return 2
+        code = command(surface_argv) or code
+    return code
+
+
 def main_one(surface, name, argv):
     """Deploy surface instance `name` of plugin type `surface`; a local instance other than `local` gets `--surface`."""
     if surface == "local" and name != "local":

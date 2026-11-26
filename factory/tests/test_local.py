@@ -134,6 +134,40 @@ class LocalDeployTest(unittest.TestCase):
     def test_unknown_argument_prints_usage(self):
         self.assertEqual(self.deploy(Machine(), "--bogus")[0], 2)
 
+    def test_isolated_deploy_checks_token_skips_failed_executor_probe_and_warns(self):
+        real = cfg.load
+        # 1. failed executor probe skips container CLI probe (no duplicate prepare failure) and does not require host `factory`
+        def load_sbx(extra=None):
+            ex_opts = {"type": "docker-sandbox", "template": "reg/sbx:1", **(extra or {})}
+            return lambda: {**real(), "executors": {"sbx": ex_opts},
+                            "targets": {**real()["targets"], "local": {**(real()["targets"].get("local") or {}), "executor": "sbx"}}}
+        with unittest.mock.patch.object(cfg, "load", load_sbx()):
+            code, out = self.deploy(Machine(tools=("gh",), origins=ORIGINS))
+        self.assertEqual(code, 1)
+        self.assertIn("`sbx` is not on PATH", out)
+        self.assertNotIn("factory: not on PATH", out)
+
+        # 2. ok executor probe but missing GITHUB_TOKEN mapping fails deploy cleanly
+        class SbxMachine(Machine):
+            def run(self, argv, **kw):
+                if argv[0] == "sbx":
+                    self.calls.append(argv)
+                    return subprocess.CompletedProcess(argv, 0, "sbx 0.54.1\n", "")
+                return super().run(argv, **kw)
+        with unittest.mock.patch.object(cfg, "load", load_sbx({"secrets": {"GITHUB_TOKEN": "MISSING_TOK"}})):
+            code, out = self.deploy(SbxMachine(tools=("gh", "sbx"), origins=ORIGINS))
+        self.assertEqual(code, 1)
+        self.assertIn("GITHUB_TOKEN is not mapped/exported", out)
+
+        # 3. auth_files and secrets_mode=env emit warnings on a passing deploy
+        with unittest.mock.patch.object(cfg, "load", load_sbx({"secrets": {"GITHUB_TOKEN": "OK_TOK"},
+                                                               "auth_files": ["claude-code"], "secrets_mode": "env"})), \
+                unittest.mock.patch.dict(os.environ, {"OK_TOK": "t1"}):
+            code, out = self.deploy(SbxMachine(tools=("gh", "sbx"), origins=ORIGINS))
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: executor sbx: auth_files copies host logins", out)
+        self.assertIn("warning: executor sbx: secrets_mode=env passes secrets via `sbx exec -e`", out)
+
 
 class PlanLocalTest(unittest.TestCase):
     def test_event_nodes_only(self):
@@ -183,15 +217,18 @@ class GitHub:
         self.push_code, self.gh_down = push_code, gh_down
 
     def kind(self, argv):
-        if argv[:2] == ["docker", "exec"]:
-            inner = argv[argv.index("--") + 1:] if "--" in argv else argv
+        if argv[:2] in (["docker", "exec"], ["sbx", "exec"]):
             if "begin" in argv:
                 return "begin"
             if any(a in ("claude", "codex", "pi") for a in argv):
                 return "harness"
-        if argv[:2] == ["docker", "run"]:
+        if argv[:2] in (["docker", "run"], ["sbx", "create"]):
             return "prepare"
-        if argv[:3] == ["docker", "rm", "-f"]:
+        if argv[:3] == ["sbx", "policy", "allow"]:
+            return "policy"
+        if argv[:3] == ["sbx", "secret", "set"]:
+            return "secret"
+        if argv[:3] in (["docker", "rm", "-f"], ["sbx", "rm", "--force"]):
             return "teardown"
         if argv[:2] == ["gh", "pr"] and argv[2] == "create":
             return "pr-create"
@@ -204,7 +241,7 @@ class GitHub:
         if argv[0] in ("claude", "codex", "pi"):
             return "harness"
         if argv[0] == "uv" and "begin" in argv:
-            return "begin"
+            return "precheck" if "--check-only" in argv else "begin"
         if argv[0] == "uv" and "sweep" in argv:
             return "sweep"
         return None
@@ -227,7 +264,7 @@ class GitHub:
             n = int(argv[3].split("/")[-2])
             labels = {**{k: v for k, v in self.issues.items()}, **{k: v for k, v in self.prs.items()}}
             return rows([{"id": 100 + n, "name": label} for label, items in labels.items() if any(i["number"] == n for i in items)])
-        if (argv[0] == "uv" or argv[:2] == ["docker", "exec"]) and "begin" in argv:
+        if (argv[0] == "uv" or argv[:2] in (["docker", "exec"], ["sbx", "exec"])) and "begin" in argv:
             return subprocess.CompletedProcess(argv, self.begin_code, json.dumps(
                 {"go": True, "branch": self.branch, "checkouts": [], "context": {"title": "Add x"}}), "")
         if argv[0] == "git" and "rev-list" in argv:
@@ -648,8 +685,330 @@ class IsolatedRunTest(RunLocalTest):
         self.assertTrue(out[0]["result"].startswith("config: executor docker has no GITHUB_TOKEN"), out)
         self.assertNotIn("prepare", gh.kinds())
 
-    def test_no_go_still_tears_the_container_down(self):
+    def test_precheck_no_go_skips_container_entirely(self):
         gh = GitHub(issues={"factory:implement-medium": [{"number": 7}]}, begin_code=10)
+        self.assertEqual(self.run_local(gh)[1][0]["result"], "no-go")
+        self.assertEqual(gh.kinds().count("precheck"), 1)
+        self.assertNotIn("prepare", gh.kinds())
+        self.assertNotIn("harness", gh.kinds())
+
+    def test_no_go_still_tears_the_container_down(self):
+        class RaceGitHub(GitHub):
+            def __call__(self, argv, **kw):
+                if argv[0] == "uv" and "--check-only" in argv:
+                    self.calls.append(("precheck", argv))
+                    return subprocess.CompletedProcess(argv, 0, '{"go": true}', "")
+                return super().__call__(argv, **kw)
+        gh = RaceGitHub(issues={"factory:implement-medium": [{"number": 7}]}, begin_code=10)
         self.assertEqual(self.run_local(gh)[1][0]["result"], "no-go")
         self.assertEqual(gh.kinds().count("teardown"), 1)
         self.assertNotIn("harness", gh.kinds())
+
+    def test_node_timeout_reads_timeout_minutes_and_timeout(self):
+        self.assertEqual(local.node_timeout({"timeout_minutes": 15}), 900)
+        self.assertEqual(local.node_timeout({"timeout": 42, "timeout_minutes": 15}), 42)
+        self.assertIsNone(local.node_timeout({}))
+
+    def test_parallel_same_automation_uses_unique_containers_and_events(self):
+        gh = GitHub(issues={"factory:implement-medium": [{"number": 7}, {"number": 8}]})
+        code, out = self.run_local(gh)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(out), 2)
+        names = [a[a.index("--name") + 1] for k, a in gh.calls if k == "prepare"]
+        self.assertEqual(len(set(names)), 2)  # never collide even in the same second
+
+    def test_parallel_pool_does_not_block_fast_runs_behind_slow_runs(self):
+        import threading
+        release_slow = threading.Event()
+        started_slow = threading.Event()
+        completed = []
+        polls = [0]
+
+        def fake_poll(plan, source, run=None):
+            polls[0] += 1
+            if polls[0] == 1:
+                return [("labeled:107", plan[0], {"issue": {"number": 7}}),
+                        ("labeled:108", plan[0], {"issue": {"number": 8}})]
+            return []
+
+        def fake_run_event(entry, payload, state, config, graph, run):
+            n = payload["issue"]["number"]
+            if n == 7:
+                started_slow.set()
+                release_slow.wait(timeout=5)
+            completed.append(n)
+            return "ran"
+
+        Path(".factory/local.json").write_text(json.dumps(
+            {"harness": "claude-code", "factory": str(FIXTURE), "poll_seconds": 0.05,
+             "checkouts": {"slop-factory": str(Path(self.tmp.name))}}))
+        real_poll_stop = [0]
+
+        def poll_then_stop(plan, source, run=None):
+            res = fake_poll(plan, source, run)
+            real_poll_stop[0] += 1
+            if real_poll_stop[0] == 2:
+                # second poll happened while slow run #7 was still blocked; #8 already completed!
+                self.assertIn(8, completed)
+                self.assertNotIn(7, completed)
+                release_slow.set()
+            if real_poll_stop[0] >= 3:
+                raise KeyboardInterrupt()
+            return res
+
+        out = io.StringIO()
+        with unittest.mock.patch.object(local, "poll", poll_then_stop), \
+                unittest.mock.patch.object(local, "run_event", fake_run_event), \
+                unittest.mock.patch.object(local, "reconcile_executors", lambda *a: {}), \
+                contextlib.redirect_stdout(out):
+            try:
+                local.main(["--local"], run=GitHub(), sleep=lambda s: None)
+            except KeyboardInterrupt:
+                pass
+        rows = [json.loads(x) for x in out.getvalue().splitlines()]
+        self.assertEqual([r["event"] for r in rows][:1], ["labeled:108"])
+
+
+class SbxIsolatedRunTest(RunLocalTest):
+    """A node run in a `docker-sandbox` (`sbx`) executor: model API allowlist, `sbx secret`, dynamic home, bundle export."""
+    for _n in [n for n in dir(RunLocalTest) if n.startswith("test_")]:
+        locals()[_n] = None
+
+    def setUp(self):
+        super().setUp()
+        real = cfg.load
+        load = lambda: {**real(), "executors": {"sbx": {"type": "docker-sandbox", "template": "reg/sbx:1",
+                                                        "secrets": {"GITHUB_TOKEN": "FACTORY_TEST_TOKEN"},
+                                                        "network": {"allow": ["pypi.org"]}}},
+                        "targets": {**real()["targets"], "local": {**real()["targets"]["local"], "executor": "sbx"}}}
+        patch = unittest.mock.patch.object(cfg, "load", load)
+        patch.start()
+        self.addCleanup(patch.stop)
+        env = unittest.mock.patch.dict(os.environ, {"FACTORY_TEST_TOKEN": "tok-123", "ANTHROPIC_API_KEY": "sk-ant-1"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_sbx_run_injects_secrets_allows_model_api_and_uses_agent_home(self):
+        class SbxGitHub(GitHub):
+            def __call__(self, argv, **kw):
+                if argv[:2] == ["sbx", "exec"] and any("HOME:-/home/factory" in a for a in argv):
+                    self.calls.append((None, argv))
+                    return subprocess.CompletedProcess(argv, 0, "/home/agent\n/home/agent/.factory-box/work\n/home/agent/.factory-box/repos\n/home/agent/.factory-box/opt\n", "")
+                return super().__call__(argv, **kw)
+        gh = SbxGitHub(issues={"factory:implement-medium": [{"number": 7}]})
+        code, out = self.run_local(gh)
+        self.assertEqual(out, [{"ran": "implement-medium", "event": "labeled:107", "result": "pushed"}])
+        kinds = [k for k in gh.kinds() if k in ("prepare", "policy", "secret", "begin", "harness", "push", "pr-create", "teardown")]
+        self.assertEqual(kinds, ["prepare", "policy", "secret", "secret", "begin", "harness", "push", "pr-create", "teardown"])
+        policy = next(a for k, a in gh.calls if k == "policy")
+        self.assertIn("api.anthropic.com", policy[4])
+        self.assertIn("pypi.org", policy[4])
+        # raw secrets were injected via `sbx secret set`, so raw GITHUB_TOKEN is absent and ANTHROPIC_API_KEY is only the sentinel
+        harness = next(a for k, a in gh.calls if k == "harness")
+        self.assertNotIn("GITHUB_TOKEN", harness)
+        self.assertNotIn("tok-123", " ".join(harness))
+        self.assertNotIn("sk-ant-1", " ".join(harness))
+        self.assertIn("/home/agent/bin", " ".join(harness))
+        # export bundles only origin/main..branch
+        bundle_calls = [a for _, a in gh.calls if a[:2] == ["sbx", "exec"] and "bundle" in a]
+        self.assertTrue(bundle_calls and bundle_calls[0][-1] == "origin/main..ez/7-add-x", bundle_calls)
+
+
+class FixesAndStartStopTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        before, cwd = cfg.team_root(), os.getcwd()
+        cfg.set_team(FIXTURE)
+        os.chdir(self.tmp.name)
+        local.use_surface("local")
+        self.addCleanup(lambda: (local.use_surface("local"), cfg.set_team(before), os.chdir(cwd)))
+
+    def test_adr0021_role_skills_are_installed_without_skills_txt(self):
+        slop = ROOT / "factory/tests/fixtures/slop"
+        team = Path(self.tmp.name) / "team"
+        shutil.copytree(slop, team)
+        for skill in ("simplified-technical-english", "tdd", "pr"):
+            (team / "skills" / skill).mkdir(parents=True, exist_ok=True)
+            (team / "skills" / skill / "SKILL.md").write_text(f"# {skill}\n")
+        cfg.set_team(team)
+        tree = Path(self.tmp.name) / "tree"
+        subprocess.run(["git", "init", "-q", str(tree)], check=True)
+        local.install_skills(subprocess.run, "developer", "codex", tree)
+        for skill in ("simplified-technical-english", "tdd", "pr", "factory-step"):
+            self.assertTrue((tree / ".agents/skills" / skill / "SKILL.md").is_file(), skill)
+
+    def test_role_executor_host_override_conflicts_with_max_parallel(self):
+        import surfaces
+        config = {"executors": {"box": {"type": "docker"}},
+                  "surfaces": {"laptop": {"type": "local", "executor": "box", "max_parallel": 2}},
+                  "roles": {"reviewer": {"executor": "host"}}}
+        errs = " | ".join(surfaces.errors(config))
+        self.assertIn("host-parallel", errs)
+        self.assertIn("roles.reviewer.executor", errs)
+
+    def test_plan_local_passes_agent_tiers(self):
+        graph = {"nodes": {"implement": {"role": "developer", "agent": "dev-strong", "triggers": ["issues.labeled factory:ready"]}}}
+        config = {"roles": {"developer": {"tier": "cheap"}},
+                  "agents": {"dev-strong": {"role": "developer", "persona": "dev", "tier": "strong"}}}
+        plan = local.plan_local(graph, config)
+        self.assertEqual(plan[0]["tier"], "strong")
+
+    def test_reused_worktree_resets_and_cleans_dirty_state(self):
+        calls = []
+        path = Path(self.tmp.name) / "wt"
+        path.mkdir()
+
+        def fake_run(argv, **kw):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        self.assertEqual(local.worktree(fake_run, Path(self.tmp.name), path, "origin/main", "ez/1-x"), "")
+        self.assertEqual([c[3] for c in calls], ["reset", "clean", "checkout"])
+
+    def test_auth_files_auto_and_aliases(self):
+        rn = local.runner("claude-code")
+        self.assertTrue(local._wants_auth_files({"auth_files": True}, "claude-code", rn))
+        self.assertTrue(local._wants_auth_files({"auth_files": "auto"}, "claude-code", rn))
+        self.assertTrue(local._wants_auth_files({"auth_files": ["claude"]}, "claude-code", rn))
+        self.assertTrue(local._wants_auth_files({"auth_files": ["all"]}, "claude-code", rn))
+        self.assertFalse(local._wants_auth_files({"auth_files": ["codex"]}, "claude-code", rn))
+
+    def test_local_start_and_stop_manage_pid_and_signals(self):
+        Path(".factory").mkdir(exist_ok=True)
+        Path(".factory/local.json").write_text(json.dumps({"factory": str(FIXTURE), "checkouts": {}}))
+
+        class FakeProc:
+            def __init__(self, pid=42424):
+                self.pid, self.returncode = pid, None
+
+            def poll(self):
+                return self.returncode
+
+        spawned = []
+
+        def fake_popen(cmd, **kw):
+            spawned.append((cmd, kw))
+            return FakeProc()
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(local.start(["--dry-run"], popen=fake_popen, sleep=lambda s: None), 0)
+        self.assertIn("would start", out.getvalue())
+        self.assertEqual(spawned, [])
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(local.start([], popen=fake_popen, sleep=lambda s: None), 0)
+        self.assertIn("started (pid 42424", out.getvalue())
+        self.assertTrue(spawned[0][1]["start_new_session"])
+        self.assertEqual(Path(".factory/local/local.pid").read_text().strip(), "42424")
+
+        # already running -> idempotent
+        out = io.StringIO()
+        with unittest.mock.patch.object(local, "_pid_alive", return_value=True), contextlib.redirect_stdout(out):
+            self.assertEqual(local.start([], popen=fake_popen, sleep=lambda s: None), 0)
+        self.assertIn("already running (pid 42424)", out.getvalue())
+        self.assertEqual(len(spawned), 1)
+
+        # stop sends SIGTERM and cleans PID file once process exits
+        signals_sent = []
+        alive_states = iter([True, False, False])
+
+        def fake_kill(pid, sig):
+            signals_sent.append((pid, sig))
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(local.stop([], kill=fake_kill, alive=lambda pid: next(alive_states, False), sleep=lambda s: None), 0)
+        import signal as sig_mod
+        self.assertEqual(signals_sent, [(42424, sig_mod.SIGTERM)])
+        self.assertIn("stopped (pid 42424)", out.getvalue())
+        self.assertFalse(Path(".factory/local/local.pid").exists())
+
+        # stop when not running is clean exit 0
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(local.stop([]), 0)
+        self.assertIn("not running", out.getvalue())
+
+    def test_air_start_and_stop_toggle_paused_and_route_from_cli(self):
+        from factory_plugins.air import deploy as air_deploy
+        import deploy as core_deploy
+        slop = ROOT / "factory/tests/fixtures/slop"
+        cfg.set_team(slop)
+        prefix = f"[{core_deploy.project_name(cfg.load())}] "
+
+        class FakeAir:
+            def __init__(self, items):
+                self.items = {x["automationId"]: dict(x) for x in items}
+                self.calls = []
+
+            def call(self, tool, args):
+                self.calls.append((tool, args))
+                if tool == "list_automations":
+                    return list(self.items.values())
+                if tool == "get_automation":
+                    return self.items[args["automationId"]]
+                if tool == "update_automation":
+                    self.items[args["automationId"]]["paused"] = args["paused"]
+                    return self.items[args["automationId"]]
+                raise AssertionError(tool)
+
+            def close(self):
+                pass
+
+        fake = FakeAir([
+            {"automationId": "a1", "name": f"{prefix}implement-medium", "paused": False},
+            {"automationId": "a2", "name": f"{prefix}review-low", "paused": True},
+            {"automationId": "other", "name": "[Other] unrelated", "paused": False},
+        ])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(air_deploy.stop(["--dry-run"], automations=fake), 0)
+        self.assertIn("would disable", out.getvalue())
+        self.assertFalse(fake.items["a1"]["paused"])
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(air_deploy.stop([], automations=fake), 0)
+        self.assertTrue(fake.items["a1"]["paused"])
+        self.assertFalse(fake.items["other"]["paused"])  # unrelated automation untouched
+        self.assertIn("disabled 1 automations (1 already disabled)", out.getvalue())
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(air_deploy.start([], automations=fake), 0)
+        self.assertFalse(fake.items["a1"]["paused"])
+        self.assertFalse(fake.items["a2"]["paused"])
+        self.assertIn("enabled 2 automations (0 already enabled)", out.getvalue())
+
+    def test_deploy_probes_multiple_harnesses_in_one_sandbox(self):
+        real = cfg.load
+
+        def load():
+            c = real()
+            return {**c, "executors": {"box": {"type": "docker", "image": "img", "secrets": {"GITHUB_TOKEN": "TOK"}}},
+                    "roles": {**c["roles"], "reviewer": {**c["roles"]["reviewer"], "harness": "codex"}},
+                    "targets": {**c["targets"], "local": {"harness": "claude-code", "executor": "box"}}}
+
+        team = Path(self.tmp.name) / "factory"
+        shutil.copytree(FIXTURE, team)
+        (team / ".git").mkdir()
+        cfg.set_team(team)
+        calls = []
+
+        class DockerMachine(Machine):
+            def run(self, argv, **kw):
+                if argv[0] == "docker":
+                    calls.append(argv)
+                    return subprocess.CompletedProcess(argv, 0, "ok\n", "")
+                return super().run(argv, **kw)
+
+        with unittest.mock.patch.object(cfg, "load", load), unittest.mock.patch.dict(os.environ, {"TOK": "t1"}):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = local.deploy([], run=DockerMachine(tools=("gh", "docker"), origins=ORIGINS).run,
+                                    which=DockerMachine(tools=("gh", "docker"), origins=ORIGINS).which)
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertEqual(len([c for c in calls if c[:2] == ["docker", "run"]]), 1)
+        self.assertEqual(len([c for c in calls if c[:2] == ["docker", "exec"] and "--version" in c]), 2)

@@ -11,5 +11,7 @@ PLUGIN = Plugin(
     name="local",
     provides={"surface": {"local": "factory_plugins.local.surface:LocalSurface"}},
     commands={"run": "factory_plugins.local.surface:main",
-              "deploy --target local": "factory_plugins.local.surface:deploy"},
+              "deploy --target local": "factory_plugins.local.surface:deploy",
+              "start --surface local": "factory_plugins.local.surface:start",
+              "stop --surface local": "factory_plugins.local.surface:stop"},
 )

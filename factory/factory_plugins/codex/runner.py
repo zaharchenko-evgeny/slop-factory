@@ -7,6 +7,7 @@ from ports.agent import probe_cli
 class Runner:
     name, cli, skill_dir = "codex", "codex", ".agents/skills"
     env, auth_files = ("OPENAI_API_KEY",), ("~/.codex",)  # what an isolated executor passes in (ADR-0029)
+    api_hosts = ("api.openai.com",)
 
     def command(self, prompt, model, write):
         """`factory begin` and `end` call GitHub, so even a reviewer's sandbox needs the network."""

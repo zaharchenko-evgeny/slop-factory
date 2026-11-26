@@ -25,6 +25,7 @@ class AgentRunner(Protocol):
     skill_dir: str  # the project skill directory, relative to the worktree
     env: tuple  # the host variables an isolated executor passes in by name (API keys)
     auth_files: tuple  # login files an executor copies in only when its instance lists `auth_files` (ADR-0029)
+    api_hosts: tuple  # model API hostnames an allowlisting executor (`docker-sandbox`) opens automatically
 
     def command(self, prompt: str, model: str, write: bool) -> list[str]:
         """The argv of one headless run: `write` nodes get edit tools, read-only nodes none."""

@@ -37,7 +37,15 @@ Implementation notes:
 - `surfaces.py` holds the instances, the selection, the machine override (`config.load` applies `.factory/local.yaml`)
   and the validation (`factory validate` through `deploy.output_errors`).
 - `run_isolated` in `factory_plugins/local/surface.py` is the sandbox run; `run_event` takes it when the role's
-  executor is isolated. `deploy --surface` probes each executor and runs `<cli> --version` in one sandbox per harness.
-- shortcut: `docker-sandbox` passes secrets as `sbx exec -e`, not `sbx secret`: which credentials `sbx` injects for
-  GitHub is unconfirmed. `reconcile` for it removes every `factory-*` sandbox (`sbx ls` shows no age).
-- Not run against a real Docker or `sbx`: the tests use a fake `run` and check the commands.
+  executor is isolated. A host-side `factory begin --check-only` skips `no-go` events before booting a sandbox.
+  `deploy --surface` probes each executor, checks mapped tokens, and runs `<cli> --version` in one shared sandbox per
+  isolated executor. `factory start` / `factory stop` manage surfaces (Air: `paused: false/true` via REST; local:
+  background loop with PID/log files and graceful `SIGTERM`/`SIGINT` drain + second-signal sandbox teardown). The loop
+  runs parallel isolated runs without batching, streams `harness.log` live, and periodically calls `executor.reconcile()`.
+- `docker-sandbox` injects `github`, `anthropic` and `openai` via `sbx secret set --sandbox --force` over stdin by default
+  (`secrets_mode: auto`), falling back to `sbx exec -e` with a warning; supports `dockerfile:` via `docker build` +
+  `docker image save` + `sbx template load` (with `--pull never`), `cpus` and `memory`; stops the VM on timeout before
+  `collect` so run logs are preserved; and reconciles only sandboxes older than `timeout + 10 min` (from `sbx ls --json`
+  `created_at` or the epoch in `factory-<ticket>-<epoch>-<seq>`).
+- Verified live against `sbx` v0.54.1 (probe, prepare, policy, secret injection, put/make_writable, timeout+stop+collect,
+  git bundle export, reconcile, teardown, and Dockerfile → `sbx template load`); full ticket harness run still pending.

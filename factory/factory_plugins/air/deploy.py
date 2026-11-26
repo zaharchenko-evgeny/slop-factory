@@ -991,6 +991,103 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     return 0
 
 
+def _live_automations(automations, prefix: str, *, backend=None, project_id: str | None = None) -> list[dict]:
+    """Live Air automations under `prefix` (scoped to `project_id` when set), with full detail (including `paused`)."""
+    if project_id:
+        listed = automations.call("list_automations", {})
+        every = [x for v in ([listed] if isinstance(listed, list) else listed.values()) if isinstance(v, list) for x in v]
+        items = [x for x in every if x.get("projectId") == project_id]
+        unfiltered = len(every)
+    else:
+        listed = automations.call("list_automations", {"privacy": "private"})
+        items = listed if isinstance(listed, list) else listed["personal"]
+        unfiltered = len(items)
+    if unfiltered >= LIST_CAP and backend:
+        items = ([x for x in backend.list_automations(project_id)] if project_id
+                 else [x for x in backend.list_automations() if not x.get("projectId")])
+    out = []
+    for x in items:
+        if not x["name"].startswith(prefix):
+            continue
+        aid = x.get("automationId") or x.get("id")
+        detail = automations.call("get_automation", {"automationId": aid}) if "paused" not in x else x
+        out.append({**detail, "id": detail.get("automationId") or detail.get("id") or aid})
+    return out
+
+
+def set_paused(paused: bool, argv: list[str], *, automations=None, backend=None) -> int:
+    """Enable (`paused=False`) or disable (`paused=True`) the factory's deployed Air automations."""
+    import surfaces
+    argv = config_mod.pop_team(list(argv))
+    surface_name, only = None, []
+    if "--surface" in argv:
+        i = argv.index("--surface")
+        if i + 1 >= len(argv):
+            print("--surface needs a surface name", file=sys.stderr)
+            return 2
+        surface_name = argv[i + 1]
+        del argv[i:i + 2]
+    while "--only" in argv:
+        i = argv.index("--only")
+        sel = argv[i + 1] if i + 1 < len(argv) else ""
+        if not sel or sel in ("node:", "env:") or sel.startswith("--"):
+            print("--only needs a selector: node:<node>, env:<environment> or a name glob", file=sys.stderr)
+            return 2
+        only.append(sel)
+        del argv[i:i + 2]
+    if set(argv) - {"--dry-run"}:
+        action = "stop" if paused else "start"
+        print(f"usage: factory {action} [--surface NAME] [--only SELECTOR]... [--dry-run]")
+        return 2
+    dry_run = "--dry-run" in argv
+    if not definition.present(config_mod.team_root()):
+        print("air: the team root has no factory.yaml and workflow.yaml (ADR-0021)", file=sys.stderr)
+        return 2
+    config = config_mod.load()
+    plan = plan_air(nodes_mod.load(), config)
+    inst = surfaces.instances(config).get(surface_name or "air") or {}
+    allowed_names = {a["name"] for a in plan["automations"]
+                     if surfaces.serves(inst, (a.get("spec") or {}).get("node"))} if inst.get("nodes") is not None else None
+    by_name = {a["name"]: a for a in plan["automations"]}
+    match = selector_matcher(only, plan) if only else None
+    owned_client = automations is None
+    if owned_client:
+        automations = Mcp(os.environ["FACTORY_MCP_AIR_AUTOMATIONS"]) if os.environ.get("FACTORY_MCP_AIR_AUTOMATIONS") else RestAutomations()
+        backend = backend or Backend()
+    verb, past = ("disable", "disabled") if paused else ("enable", "enabled")
+    try:
+        live = _live_automations(automations, plan["prefix"], backend=backend, project_id=plan.get("projectId"))
+        targets = [x for x in live if (allowed_names is None or x["name"] in allowed_names)
+                   and (match is None or match("automation", x["name"], by_name.get(x["name"])))]
+        changed, unchanged = 0, 0
+        for item in sorted(targets, key=lambda x: x["name"]):
+            if bool(item.get("paused")) == paused:
+                unchanged += 1
+                continue
+            if dry_run:
+                print(f"would {verb} {item['name']}")
+            else:
+                automations.call("update_automation", {"automationId": item["id"], "paused": paused})
+                print(f"{past} {item['name']}")
+            changed += 1
+        summary = f"would {verb} {changed}" if dry_run else f"{past} {changed}"
+        print(f"air: {summary} automations ({unchanged} already {past})")
+        return 0
+    finally:
+        if owned_client:
+            automations.close()
+
+
+def start(argv: list[str], **kw) -> int:
+    """`factory start` on Air: enable (`paused: false`) deployed automations."""
+    return set_paused(False, argv, **kw)
+
+
+def stop(argv: list[str], **kw) -> int:
+    """`factory stop` on Air: disable (`paused: true`) deployed automations."""
+    return set_paused(True, argv, **kw)
+
+
 def main(argv: list[str]) -> int:
     argv = config_mod.pop_team(argv)
     if not definition.present(config_mod.team_root()):

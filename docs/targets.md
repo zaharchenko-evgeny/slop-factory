@@ -248,10 +248,15 @@ executors:
            cpus: 2, memory: 4g, timeout: 3600, network: default}   # or none
   sbx:    {type: docker-sandbox, template: registry/img:1, sbx_version: "0.54.1", network: {allow: [pypi.org]}}
 ```
-`factory deploy --surface air,laptop` deploys both; `factory run --local --surface laptop` runs one. `.factory/local.yaml`
+`factory deploy --surface air,laptop` deploys both; `factory start --surface air,laptop` and `factory stop --surface air,laptop`
+start/stop them (on Air: enable/disable deployed automations via `paused`; locally: start/stop the background polling
+loop with a PID file in `.factory/local/<surface>.pid`, graceful drain on `SIGTERM`, and `--force` to abort and tear
+down active sandboxes). `factory run --local --surface laptop` runs the loop directly in the foreground. `.factory/local.yaml`
 (git-ignored) overrides `surfaces:` and `executors:` by name, never an Air surface. An Air surface with `harness`,
 `executor` or `max_parallel` is `air-surface-has-<key>`; a node on two selected surfaces is `node-on-two-surfaces`.
-A `docker` or `docker-sandbox` run mounts nothing: the sandbox clones the repositories, makes the worktrees, runs
-`begin` and the harness, and the host exports the branch bundle, pushes it and opens the PR. Run files and the harness
-log are copied to `.factory/runs/<id>/` before the sandbox is removed. `GITHUB_TOKEN` must be mapped in `secrets` to a
-scoped token (issues and PRs write, contents read); `auth_files: [<harness>]` copies a harness login in, opt-in.
+A `docker` or `docker-sandbox` run mounts nothing: a fast host-side `factory begin --check-only` skips `no-go` events
+before booting a sandbox, then the sandbox clones the repositories, makes the worktrees, runs `begin` and the harness
+(streaming `.factory/runs/<id>/harness.log` live), and the host exports the branch bundle, pushes it and opens the PR.
+Run files are copied to `.factory/runs/<id>/` before the sandbox is removed. `GITHUB_TOKEN` must be mapped in `secrets`
+to a scoped token (issues and PRs write, contents read); `auth_files: auto` (or `[<harness>]`) copies already-logged-in
+host harness credentials in, opt-in.
