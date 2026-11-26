@@ -1,9 +1,9 @@
 ---
 name: factory-deploy
-description: "Deploy the factory nodes to Air Cloud: render the plan with deploy.py, compare it with the existing project-prefixed automations and environments through the Air REST APIs, and apply the creates, updates and deletes. Use when the user asks to deploy, sync or update the factory on Air."
+description: "Deploy, start and stop factory surfaces (Air Cloud and local/docker/docker-sandbox): render plans with deploy.py, sync Air automations and environments over REST, probe and register local surfaces and executors, and enable/disable or start/stop surfaces. Use when the user asks to deploy, sync, update, start or stop a factory."
 ---
 
-# Factory deploy (Air target)
+# Factory deploy (Air and local surfaces)
 
 Read first: the team repository's `factory.yaml`,
 its `workflow.yaml`, and `docs/targets.md`. Set `FACTORY_TEAM` to the team
@@ -73,6 +73,25 @@ pause every personal automation with the plan's prefix (`PATCH /automations/<id>
 copies wake on each event. Delete them once the project copies have run (`--allow-delete` does not remove them:
 deploy no longer lists personal ones). Open a follow-up ticket to automate it.
 
-## Local target
+## Local surfaces and executors (ADR-0017, ADR-0029)
 
-`factory --team <team-repo> deploy --target local` checks the harness CLI, the `gh` login and the repository checkouts and names what is missing; `--apply` writes `.factory/local.json` for `factory run --local` (ADR-0017, `docs/targets.md`).
+A team can declare named surfaces under `surfaces:` and isolated executors (`host`, `docker`, `docker-sandbox`) under `executors:` in `factory.yaml` (with optional git-ignored machine overrides in `.factory/local.yaml`, which never override Air). See `docs/targets.md` and `skills/factory-setup/references/executors.md`.
+
+1. **Validate:** `factory --team <team-repo> validate` checks surface names, executor configs, `max_parallel` (requires an isolated executor when `> 1`), and node overlap (`node-on-two-surfaces`).
+2. **Prepare secrets & prerequisites:**
+   - `host` executor: uses already-installed CLIs (`codex`, `junie`, `pi`, `claude`) and existing `gh` login with no extra secret exports.
+   - `docker` / `docker-sandbox` (`sbx`): export a scoped GitHub token (issues & PRs write, contents read — never `gh auth token`) under the host variable mapped in `executors.<name>.secrets.GITHUB_TOKEN` (e.g. `FACTORY_SANDBOX_GH_TOKEN`). Export harness API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `JUNIE_API_KEY`) or set `auth_files: auto` to copy already-authenticated host harness logins into the sandbox.
+   - For `docker-sandbox`, run `sbx login` and `sbx policy init balanced` once per machine.
+3. **Probe & register:** `factory --team <team-repo> deploy --surface <name> --apply` (or `--target local --apply` for the default `local` instance) probes each executor, checks mapped tokens, verifies every harness CLI (`<cli> --version`) in one shared sandbox per isolated executor, checks `gh` auth and repository checkouts, and writes `.factory/local[-<name>].json`.
+
+## Start and stop surfaces
+
+Use `factory start` and `factory stop` to turn surfaces on or off without deleting anything (`--surface a,b` selects specific instances; omitting it uses `surface:` in `factory.yaml`):
+
+- **Air surface:**
+  - `factory --team <team-repo> stop --surface air [--only SELECTOR]... [--dry-run]` sets `paused: true` on deployed factory-prefixed automations.
+  - `factory --team <team-repo> start --surface air [--only SELECTOR]... [--dry-run]` sets `paused: false` on deployed factory-prefixed automations.
+- **Local surface:**
+  - `factory --team <team-repo> start --surface <name> [--foreground] [--once] [--dry-run]` starts the polling loop in the background (PID in `.factory/local/<name>.pid`, logs in `.factory/local/<name>.log`; `--foreground` runs attached).
+  - `factory --team <team-repo> stop --surface <name> [--force] [--timeout N] [--dry-run]` sends `SIGTERM` to drain in-flight runs cleanly and exit; `--force` aborts and immediately tears down active sandboxes.
+  - Run `factory --team <team-repo> run --local --surface <name> --dry-run --once` before the first start to preview queued events.
