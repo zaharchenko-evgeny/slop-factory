@@ -11,6 +11,7 @@ References (contract plus one section per adapter):
 - [`references/channels.md`](references/channels.md)
 - [`references/targets.md`](references/targets.md)
 - [`references/harnesses.md`](references/harnesses.md)
+- [`references/executors.md`](references/executors.md)
 - [`references/checks.md`](references/checks.md)
 - [`references/run-log.md`](references/run-log.md)
 - [`references/nodes.md`](references/nodes.md): each node's purpose, trigger and outcomes
@@ -57,7 +58,7 @@ Ask, one round at a time, with a recommended answer for each question:
    - YouTrack: one linked project per repository,
      `tracker.projects: {<project>: <owner/repo>}`.
 3. Channels: Slack Air Mate, local, Air session (`references/channels.md`).
-4. Targets: Air (project id) and/or local harnesses.
+4. Targets: Air (project id) and/or local harnesses; for local, also the executor (`references/executors.md`).
 5. Models: the Air model id for each alias (`cheap`, `mid`, `strong`, `review`,
    `review_strong`), and which agent uses which alias.
 6. Gates: auto-merge and its highest risk (the `merge` node's settings), and

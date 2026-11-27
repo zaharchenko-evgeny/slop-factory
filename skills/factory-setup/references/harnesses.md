@@ -9,6 +9,8 @@ Values: `claude-code`, `codex`, `junie`, `pi`; an unknown value fails
 `factory deploy --target local` checks the CLI of every harness the roles use;
 `factory run --local` starts each role in its own.
 
+Where the harness runs (host, container, sandbox) is an executor: `references/executors.md`.
+
 ## Adapter contract (local target)
 
 - `command`: argv from model, tools, session, skills, role files and prompt.

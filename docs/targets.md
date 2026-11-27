@@ -235,3 +235,28 @@ The engine sends no notifications of its own. A team's `notify` node wakes on th
 `message`, which the gate posts as a comment on that ticket or PR, mentioning `owner` from `factory.yaml`, or
 `skipped`. Air run-end `outboundWebhooks` cannot wake an automation: Air signs them with an HMAC secret and sends no
 `Authorization: ApiKey` header (AIRA-627). `recover --stale` labels the ticket `factory:needs-human` and assigns the owner.
+
+## Local surfaces and executors (ADR-0029)
+`surfaces:` names instances of a surface plugin; `executors:` names where a local agent runs.
+```yaml
+surface: [air]                       # what `factory deploy` deploys with no flag
+surfaces:
+  air:    {type: air}
+  laptop: {type: local, harness: claude-code, executor: box, nodes: [implement, fix], max_parallel: 4}
+executors:
+  box:    {type: docker, dockerfile: executors/box/Dockerfile, secrets: {GITHUB_TOKEN: FACTORY_SANDBOX_GH_TOKEN},
+           cpus: 2, memory: 4g, timeout: 3600, network: default}   # or none
+  sbx:    {type: docker-sandbox, template: registry/img:1, sbx_version: "0.54.1", network: {allow: [pypi.org]}}
+```
+`factory deploy --surface air,laptop` deploys both; `factory start --surface air,laptop` and `factory stop --surface air,laptop`
+start/stop them (on Air: enable/disable deployed automations via `paused`; locally: start/stop the background polling
+loop with a PID file in `.factory/local/<surface>.pid`, graceful drain on `SIGTERM`, and `--force` to abort and tear
+down active sandboxes). `factory run --local --surface laptop` runs the loop directly in the foreground. `.factory/local.yaml`
+(git-ignored) overrides `surfaces:` and `executors:` by name, never an Air surface. An Air surface with `harness`,
+`executor` or `max_parallel` is `air-surface-has-<key>`; a node on two selected surfaces is `node-on-two-surfaces`.
+A `docker` or `docker-sandbox` run mounts nothing: a fast host-side `factory begin --check-only` skips `no-go` events
+before booting a sandbox, then the sandbox clones the repositories, makes the worktrees, runs `begin` and the harness
+(streaming `.factory/runs/<id>/harness.log` live), and the host exports the branch bundle, pushes it and opens the PR.
+Run files are copied to `.factory/runs/<id>/` before the sandbox is removed. `GITHUB_TOKEN` must be mapped in `secrets`
+to a scoped token (issues and PRs write, contents read); `auth_files: auto` (or `[<harness>]`) copies already-logged-in
+host harness credentials in, opt-in.

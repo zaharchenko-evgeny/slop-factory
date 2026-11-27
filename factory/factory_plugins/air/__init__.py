@@ -14,5 +14,7 @@ PLUGIN = Plugin(
     name="air",
     provides={"surface": {"air": "factory_plugins.air.surface:AirSurface"}},
     commands={"deploy --target air": "factory_plugins.air.deploy:main",
+              "start --surface air": "factory_plugins.air.deploy:start",
+              "stop --surface air": "factory_plugins.air.deploy:stop",
               "contracts": "factory_plugins.air.contracts:main"},
 )

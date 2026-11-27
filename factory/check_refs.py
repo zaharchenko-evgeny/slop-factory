@@ -39,7 +39,7 @@ ALLOW = {
     "refs/factory/_frontier/lease", "POST git/refs", ".claude/skills/", "JetBrains/jbeval",
     "app/jetbrains-air", "origin/main", "anthropic/claude-haiku-5-5", "context.md", "run_role.py",
     "routine.sm.yaml", "workflows/delivery.sm.yaml", "workflows/routine.sm.yaml", ".factory/runs/",
-    ".factory/handoff/<node>.json", ".factory/local.json", ".factory/local/seen.json", "<dir>/<repo>/lessons.md", "<dir>/_shared/lessons.md",
+    ".factory/handoff/<node>.json", ".factory/local.json", ".factory/local.yaml", ".factory/local/seen.json", "<dir>/<repo>/lessons.md", "<dir>/_shared/lessons.md",
     "workflows/*.md", "Design: docs/<file>.md#<section>", "drive.py", "sm.py", "delivery.sm.yaml",
     "git/refs", "github/", "claude/skills/", "agents/skills/", "ez/", "ez/152-probes", "ez/152-probe-p5",
     "checks.json", "addressed.json", "findings.json", "notes.json",
@@ -66,6 +66,7 @@ def docs(root=ROOT):
     paths = [root / "README.md", root / "AGENTS.md"]
     paths += sorted((root / "docs").glob("**/*.md"))
     return [p for p in paths if p.is_file() and "docs/adr/" not in p.relative_to(root).as_posix()
+            and "docs/research/" not in p.relative_to(root).as_posix()
             and "knowledge/" not in p.relative_to(root).as_posix()]
 
 
