@@ -7,6 +7,7 @@ uses `sbx secret set --sandbox --force` via stdin and falls back to `exec -e`), 
 every exec), auth_files.
 """
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -25,6 +26,7 @@ SECRET_SERVICES = {"GITHUB_TOKEN": "github", "ANTHROPIC_API_KEY": "anthropic", "
 SENTINEL_KEYS = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}  # shell sandboxes do not export these; proxy swaps header
 NAME_EPOCH_RE = re.compile(rf"^{PREFIX}[^-]+-(\d{{10,}})(?:-[\w.-]+)?$")
 _BUILD_LOCK = threading.Lock()
+_PUT_SEQ = itertools.count(1)
 
 
 def _decode(data):
@@ -34,12 +36,12 @@ def _decode(data):
 CONTEXT_SKIP = {".git", "__pycache__", ".venv", "node_modules", ".factory"}
 
 
-def _context_hash(df: Path) -> str:
+def _context_hash(df: Path, ctx_root: Path | None = None) -> str:
     """SHA-256 over the Dockerfile and every file in its build context directory, so `COPY` changes bust the cache."""
     h = hashlib.sha256()
     h.update(b"dockerfile\0")
     h.update(df.read_bytes())
-    root = df.parent
+    root = ctx_root or df.parent
     if root.is_dir():
         for path in sorted(p for p in root.rglob("*") if p.is_file() and p != df
                            and not (CONTEXT_SKIP & set(p.relative_to(root).parts))):
@@ -107,12 +109,13 @@ class Executor:
         if not o.get("dockerfile"):
             return None, False
         df = _resolve_dockerfile(o["dockerfile"])
-        tag = f"factory-sbx-{_context_hash(df)}:latest"
+        ctx_root = _resolve_dockerfile(o["context"]) if o.get("context") else df.parent
+        tag = f"factory-sbx-{_context_hash(df, ctx_root)}:latest"
         with _BUILD_LOCK:
             listed = self.sbx("template", "ls")
             if listed.returncode == 0 and _template_listed(listed.stdout, tag):
                 return tag, True
-            built = self.run(["docker", "build", "-t", tag, "-f", str(df), str(df.parent)], capture_output=True, text=True)
+            built = self.run(["docker", "build", "-t", tag, "-f", str(df), str(ctx_root)], capture_output=True, text=True)
             if built.returncode:
                 raise RuntimeError(f"docker build failed: {(built.stderr or built.stdout)[-300:]}")
             with tempfile.TemporaryDirectory() as tmp:
@@ -211,6 +214,17 @@ class Executor:
         return done
 
     def put(self, handle, src, dst):
+        src_path = Path(src)
+        if src_path.is_dir():
+            stage = f"/tmp/factory-put-{os.getpid()}-{next(_PUT_SEQ)}"
+            done = self.sbx("cp", str(src_path), f"{handle}:{stage}")
+            if done.returncode:
+                raise RuntimeError(f"sbx cp failed: {(done.stderr or done.stdout)[-300:]}")
+            merged = self.exec(handle, ["sh", "-c", 'mkdir -p "$1" && cp -Rp "$2"/. "$1"/ && rm -rf "$2"',
+                                        "sh", str(dst), stage])
+            if merged.returncode:
+                raise RuntimeError(f"sbx put merge failed: {(merged.stderr or merged.stdout)[-300:]}")
+            return
         self.exec(handle, ["mkdir", "-p", str(Path(dst).parent)])
         done = self.sbx("cp", str(src), f"{handle}:{dst}")
         if done.returncode:
@@ -250,6 +264,8 @@ class Executor:
         if o.get("dockerfile"):
             if not _resolve_dockerfile(o["dockerfile"]).exists():
                 return [ProbeResult("executor:docker-sandbox", "missing", f"dockerfile {o['dockerfile']} does not exist")]
+            if o.get("context") and not _resolve_dockerfile(o["context"]).is_dir():
+                return [ProbeResult("executor:docker-sandbox", "missing", f"context {o['context']} does not exist")]
             if not which("docker"):
                 return [ProbeResult("executor:docker-sandbox", "missing", "`docker` is not on PATH (needed to build and load `dockerfile` into `sbx`)")]
         return [ProbeResult("executor:docker-sandbox", "ok", "sbx is installed and logged in")]

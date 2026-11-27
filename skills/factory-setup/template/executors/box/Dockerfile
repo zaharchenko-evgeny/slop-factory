@@ -8,4 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-cer
 # A non-root user: harnesses refuse to skip permission prompts as root.
 RUN useradd -m -d /home/factory factory && mkdir -p /work /repos /opt/factory && chown -R factory /work /repos /opt/factory
 USER factory
+ENV PATH="/home/factory/.local/bin:$PATH"
 WORKDIR /work
+# Optional: bake setup.sh tools into the image (set `context: .` on the executor in factory.yaml, then `setup: false`):
+# COPY --chown=factory environments/setup.sh /tmp/setup/environments/setup.sh
+# COPY --chown=factory roles/developer/setup.sh /tmp/setup/roles/developer/setup.sh
+# RUN bash /tmp/setup/environments/setup.sh && rm -rf /tmp/setup

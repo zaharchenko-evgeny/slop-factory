@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import config
 import definition
 
 ENGINE_SKILLS = ("factory-step", "factory-troubleshoot")
+_CACHE_LOCK = threading.Lock()
 
 
 def tree_hash(d):
@@ -187,6 +189,97 @@ def _copy(src, dst):
         raise SystemExit(f"factory setup: no SKILL.md in {src}")
     shutil.rmtree(dst, ignore_errors=True)
     shutil.copytree(src, dst)
+
+
+def resolve_skill(name, spec, root, cache_dir=None, home=None, fetcher=None):
+    """Resolve one skill directory for local or isolated execution, verifying `source:` skills by sha256 and
+    caching them under `cache_dir` (`<name>-<sha[:12]>`). Returns a Path or None when unavailable offline."""
+    spec = spec if isinstance(spec, dict) else {}
+    home_dir = Path(home or Path.home())
+    if "source" in spec:
+        sha = spec.get("sha256") or ""
+        cached = (Path(cache_dir) / f"{name}-{sha[:12]}") if cache_dir and sha else None
+        if cached and cached.is_dir() and (cached / "SKILL.md").is_file() and tree_hash(cached) == sha:
+            return cached
+        existing = home_dir / ".agents/skills" / name
+        if existing.is_dir() and (existing / "SKILL.md").is_file() and (not sha or tree_hash(existing) == sha):
+            return existing
+        if fetcher is None:
+            return None
+        with _CACHE_LOCK:
+            if cached and cached.is_dir() and (cached / "SKILL.md").is_file() and tree_hash(cached) == sha:
+                return cached
+            with tempfile.TemporaryDirectory() as tmp:
+                src = Path(fetcher(spec, f"{tmp}/{name}"))
+                if not (src / "SKILL.md").is_file():
+                    raise RuntimeError(f"skill {name}: no SKILL.md in {src}")
+                if sha and tree_hash(src) != sha:
+                    raise RuntimeError(f"skill {name}: sha256 differs from factory.yaml")
+                target = cached or (Path(cache_dir) / name if cache_dir else existing)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                staging = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=target.parent))
+                try:
+                    staged = staging / "skill"
+                    shutil.copytree(src, staged)
+                    shutil.rmtree(target, ignore_errors=True)
+                    os.replace(staged, target)
+                finally:
+                    shutil.rmtree(staging, ignore_errors=True)
+                return target
+    rel = spec.get("path")
+    cand = (Path(root) / rel) if rel else (Path(root) / "skills" / name)
+    if not cand.is_dir():
+        cand = home_dir / ".agents/skills" / name
+    return cand if cand.is_dir() else None
+
+
+def resolve_role_skills(defn, role, cache_dir=None, home=None, fetcher=None):
+    """`[(name, path)]` of `role`'s skills (defaults + role) plus the engine's `ENGINE_SKILLS`."""
+    out, seen = [], set()
+    root = defn["root"]
+    for name, spec in (definition.role_skills(defn, role) if role else {}).items():
+        path = resolve_skill(name, spec, root, cache_dir=cache_dir, home=home, fetcher=fetcher)
+        if path is not None and name not in seen:
+            seen.add(name)
+            out.append((name, path))
+    for name in ENGINE_SKILLS:
+        cand = config.engine_root() / "skills" / name
+        if cand.is_dir() and name not in seen:
+            seen.add(name)
+            out.append((name, cand))
+    return out
+
+
+def setup_scripts(defn, env_name, role):
+    """Ordered `[env_setup, role_setup]` paths that exist for `(env_name, role)`."""
+    root = Path(defn["root"])
+    scripts = []
+    env = ((defn["factory"].get("environments") or {}).get(env_name) or {}) if env_name else {}
+    if env.get("setup"):
+        p = root / env["setup"]
+        if p.is_file():
+            scripts.append(p)
+    if role:
+        p = root / "roles" / role / "setup.sh"
+        if p.is_file():
+            scripts.append(p)
+    return scripts
+
+
+def scripts_fingerprint(scripts, root=None):
+    """12-hex SHA-256 over the ordered setup script paths and contents, or `''` when `scripts` is empty."""
+    if not scripts:
+        return ""
+    h = hashlib.sha256()
+    root_path = Path(root) if root else None
+    items = []
+    for script in scripts:
+        p = Path(script)
+        label = p.relative_to(root_path).as_posix() if root_path and p.is_relative_to(root_path) else p.name
+        items.append((label, p.read_bytes()))
+    for label, data in sorted(items):
+        h.update(label.encode() + b"\0" + data + b"\0")
+    return h.hexdigest()[:12]
 
 
 def main(argv):

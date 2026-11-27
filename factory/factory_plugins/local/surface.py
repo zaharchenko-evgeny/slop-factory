@@ -23,6 +23,7 @@ import itertools
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -42,6 +43,7 @@ import deploy as deploy_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 import plugins  # noqa: E402
 import surfaces  # noqa: E402
+import team_setup  # noqa: E402
 from gate_port import ticket_from_ref  # noqa: E402
 from ports.system import Query  # noqa: E402
 
@@ -109,6 +111,8 @@ def runner(harness, config=None):
 
 STATE, SEEN, WORKTREES = Path(".factory/local.json"), Path(".factory/local/seen.json"), Path(".factory/worktrees")
 TRIES_FILE = Path(".factory/local/tries.json")  # failed runs per event that are tried again
+SKILL_CACHE = Path(".factory/cache/skills")
+SETUP_STATE = Path(".factory/local/setup-done.json")
 PID_FILE, LOG_FILE = Path(".factory/local/local.pid"), Path(".factory/local/local.log")
 FACTORY = ["uv", "run", "--quiet", str(ENGINE / "cli.py")]
 WRITE_OUTPUTS = ("create-pr", "push-to-source")
@@ -204,48 +208,63 @@ def due_schedules(plan, crons, when):
             if cron_due(crons[name]["cron"], when)]
 
 
-def role_skill_sources(role):
-    """Skill directories for `role`: ADR-0021 `factory.yaml` (`defaults.skills` + `roles.<role>.skills`), plus any
-    legacy `roles/<role>/skills.txt` entries, and always the engine's `factory-step`."""
-    sources, seen = [], set()
+def role_skill_entries(role, fetcher=None, cache_dir=None, home=None):
+    """`[(name, path)]` of `role`'s skills: ADR-0021 `factory.yaml` (resolved & sha256-verified via `team_setup`),
+    any legacy `roles/<role>/skills.txt` entries, and always the engine's `ENGINE_SKILLS`."""
+    entries, seen = [], set()
 
-    def add(path):
-        if path and path.is_dir() and path.name not in seen:
-            seen.add(path.name)
-            sources.append(path)
+    def add(name, path):
+        if path and path.is_dir() and name not in seen:
+            seen.add(name)
+            entries.append((name, path))
 
     root = config_mod.team_root()
     if definition.present(root):
         defn = definition.load(root)
-        for name, spec in definition.role_skills(defn, role).items():
-            rel = (spec or {}).get("path") if isinstance(spec, dict) else None
-            cand = (root / rel) if rel else (root / "skills" / name)
-            if not cand.is_dir():
-                cand = Path.home() / ".agents/skills" / name
-            add(cand)
+        for name, path in team_setup.resolve_role_skills(defn, role, cache_dir=cache_dir or SKILL_CACHE,
+                                                          home=home, fetcher=fetcher):
+            add(name, path)
     listed = config_mod.resolve(f"roles/{role}/skills.txt")
     if listed.exists():
         for x in listed.read_text().split():
-            add(config_mod.resolve(f"skills/{x}"))
-    add(config_mod.engine_root() / "skills/factory-step")
-    return sources
+            add(x, config_mod.resolve(f"skills/{x}"))
+    for name in team_setup.ENGINE_SKILLS:
+        add(name, config_mod.engine_root() / "skills" / name)
+    return entries
 
 
-def install_skills(run, role, harness, tree):
-    """Copy the role's skills and `factory-step` into the harness's project skill directory of the worktree `tree`,
-    and keep that directory out of git."""
+def role_skill_sources(role, fetcher=None, cache_dir=None, home=None):
+    """Skill directories for `role`: ADR-0021 `factory.yaml` (`defaults.skills` + `roles.<role>.skills`), plus any
+    legacy `roles/<role>/skills.txt` entries, and always the engine's `factory-step`."""
+    return [path for _, path in role_skill_entries(role, fetcher=fetcher, cache_dir=cache_dir, home=home)]
+
+
+def _exclude_in_worktree(run, tree, lines_to_add):
+    """Add `lines_to_add` to `tree`'s git `info/exclude` without duplicates."""
+    path = sh(run, ["git", "-C", str(tree), "rev-parse", "--git-path", "info/exclude"]).stdout.strip()
+    if not path:
+        return
+    exclude = tree / path
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    text = exclude.read_text() if exclude.exists() else ""
+    existing = set(text.split())
+    new_lines = [line for line in lines_to_add if line and line not in existing]
+    if new_lines:
+        prefix = "" if not text or text.endswith("\n") else "\n"
+        exclude.write_text(text + prefix + "\n".join(new_lines) + "\n")
+
+
+def install_skills(run, role, harness, tree, sources=None, fetcher=None):
+    """Copy the role's skills and engine skills into the harness's project skill directory of the worktree `tree`,
+    and keep only the installed entries out of git (per-skill when `skill_dir` already has tracked files)."""
     skill_dir = runner(harness).skill_dir
     target = tree / skill_dir
-    for src in role_skill_sources(role):
-        shutil.copytree(src, target / src.name, dirs_exist_ok=True)
-    path = sh(run, ["git", "-C", str(tree), "rev-parse", "--git-path", "info/exclude"]).stdout.strip()
-    if path:
-        exclude = tree / path
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        text = exclude.read_text() if exclude.exists() else ""
-        line = skill_dir.split("/")[0] + "/skills/"
-        if line not in text.split():
-            exclude.write_text(text + ("" if not text or text.endswith("\n") else "\n") + line + "\n")
+    entries = sources if sources is not None else role_skill_entries(role, fetcher=fetcher)
+    for name, src in entries:
+        shutil.copytree(src, target / name, dirs_exist_ok=True)
+    tracked = sh(run, ["git", "-C", str(tree), "ls-files", skill_dir]).stdout.strip()
+    lines_to_add = [f"{skill_dir}/{name}/" for name, _ in entries] if tracked else [skill_dir.split("/")[0] + "/skills/"]
+    _exclude_in_worktree(run, tree, lines_to_add)
 
 
 def same_repository(url, origin):
@@ -282,8 +301,12 @@ def checks(config, run=subprocess.run, which=shutil.which):
         if ex.isolated:
             gh_var = ((ex.options or {}).get("secrets") or {}).get("GITHUB_TOKEN")
             if not gh_var or gh_var not in os.environ:
-                missing.append(f"executor: {name}: GITHUB_TOKEN is not mapped/exported "
-                               f"(set `executors.{name}.secrets: {{GITHUB_TOKEN: <host var>}}` and export it)")
+                if (ex.options or {}).get("github_token_from_gh"):
+                    if not _gh_cli_token(run):
+                        missing.append(f"executor: {name}: github_token_from_gh is enabled, but `gh auth token` failed (run `gh auth login`)")
+                else:
+                    missing.append(f"executor: {name}: GITHUB_TOKEN is not mapped/exported "
+                                   f"(set `executors.{name}.secrets: {{GITHUB_TOKEN: <host var>}}` and export it)")
     isolated_harnesses = {}
     for harness, name in combos:
         if name in failed_executors:
@@ -304,6 +327,12 @@ def checks(config, run=subprocess.run, which=shutil.which):
         try:  # probe every harness sharing one isolated executor inside a single sandbox start
             handle = ex.prepare(f"probe-{int(time.time())}-{os.getpid()}-{next(_RUN_SEQ)}")
             try:
+                tools_check = ex.exec(
+                    handle, ["sh", "-c", 'for b in git gh; do command -v "$b" >/dev/null || { echo "$b"; exit 1; }; done'],
+                    timeout=60)
+                if tools_check.returncode:
+                    tool_name = (tools_check.stdout or "").strip().splitlines()[-1] if (tools_check.stdout or "").strip() else "git/gh"
+                    missing.append(f"executor: {name}: missing required tool `{tool_name}` inside sandbox")
                 for harness, rn in items:
                     if ex.exec(handle, [rn.cli, "--version"], timeout=120).returncode:
                         missing.append(f"harness: `{rn.cli}` ({harness}) does not run in executor {name}")
@@ -311,6 +340,12 @@ def checks(config, run=subprocess.run, which=shutil.which):
                 ex.teardown(handle)
         except (RuntimeError, OSError) as e:
             missing.append(f"executor: {name}: {e}"[:300])
+    if run is subprocess.run and definition.present(team):
+        for r in sorted({e["role"] for e in plan_local(nodes_mod.load(), config) if e["role"] != "script"}):
+            try:
+                role_skill_entries(r, fetcher=team_setup.fetch)
+            except (RuntimeError, ValueError, OSError) as e:
+                missing.append(f"skill: {e}")
     if any(surfaces.executor_type(config, name) == "host" for name in executors) and not which("factory"):
         missing.append("factory: not on PATH (the agent runs `factory begin` and `factory end`; `uv tool install` the engine)")
     if not which("gh"):
@@ -357,8 +392,31 @@ def deploy(argv, run=subprocess.run, which=shutil.which):
         opts = (config.get("executors") or {}).get(name) or {}
         if opts.get("auth_files"):
             print(f"warning: executor {name}: auth_files copies host logins into the sandbox; prefer API keys (ADR-0029)")
+        gh_var = (opts.get("secrets") or {}).get("GITHUB_TOKEN")
+        if opts.get("github_token_from_gh") and (not gh_var or gh_var not in os.environ):
+            print(f"warning: executor {name}: github_token_from_gh falls back to host `gh auth token` "
+                  f"(inherits your gh login scopes; prefer a scoped token in {gh_var or 'secrets.GITHUB_TOKEN'})")
         if surfaces.executor_type(config, name) == "docker-sandbox" and opts.get("secrets_mode") == "env":
             print(f"warning: executor {name}: secrets_mode=env passes secrets via `sbx exec -e` (readable inside the VM)")
+    if definition.present(config_mod.team_root()):
+        defn = definition.load(config_mod.team_root())
+        nodes_graph = nodes_mod.load()
+        for name in state["executors"]:
+            if surfaces.executor_type(config, name) == "host":
+                continue
+            opts = (config.get("executors") or {}).get(name) or {}
+            mapped = set(opts.get("secrets") or {}) | set(opts.get("env") or [])
+            if "GITHUB_TOKEN" in mapped or opts.get("github_token_from_gh"):
+                mapped |= {"GITHUB_TOKEN", "GH_TOKEN"}
+            envs_used = sorted({nodes_graph["nodes"][e["node"]].get("env") for e in plan
+                                if e["role"] != "script" and role_executor(config, e["role"], e["focus"]) == name
+                                and nodes_graph["nodes"][e["node"]].get("env")})
+            warned = set()
+            for env_name in envs_used:
+                for var, meta in definition.environment_variables(defn, env_name).items():
+                    if meta.get("required") and var not in mapped and var not in warned:
+                        warned.add(var)
+                        print(f"warning: executor {name}: required env var {var} is not mapped in executors.{name}.secrets or executors.{name}.env")
     print(f"local: {len(plan)} automations, harnesses {', '.join(state['harnesses'])}, checkouts {', '.join(state['checkouts'])}")
     if "--apply" in argv:
         surface = LocalSurface()
@@ -496,11 +554,25 @@ BOX = {"work": "/work", "repos": "/repos", "engine": "/opt/factory/engine", "tea
 STAGE_IGNORE = shutil.ignore_patterns(".git", ".factory", ".venv", "node_modules", "__pycache__", "build", "dist", "*.egg-info")
 
 
-def box_env(ex, rn, team_path=BOX["team"]):
+def _gh_cli_token(run=subprocess.run):
+    """Read the host `gh` login token via `gh auth token` when explicitly opted in (`github_token_from_gh: true`)."""
+    try:
+        done = run(["gh", "auth", "token"], capture_output=True, text=True)
+    except OSError:
+        return None
+    tok = (done.stdout or "").strip() if done.returncode == 0 else ""
+    return tok or None
+
+
+def box_env(ex, rn, team_path=BOX["team"], run=subprocess.run):
     """The environment of an isolated run: the instance's `secrets` ({NAME: HOST_VAR}), the harness's API keys and the
-    instance's `env` names that the host has, and the team path. Names only in factory.yaml; values come from the host."""
+    instance's `env` names that the host has, and the team path. Names only in factory.yaml; values come from the host.
+    When `GITHUB_TOKEN` is unset and the executor opts into `github_token_from_gh: true`, falls back to `gh auth token`."""
     opts = getattr(ex, "options", {}) or {}
     env = {n: os.environ[h] for n, h in (opts.get("secrets") or {}).items() if h in os.environ}
+    if "GITHUB_TOKEN" not in env and opts.get("github_token_from_gh"):
+        if tok := _gh_cli_token(run):
+            env["GITHUB_TOKEN"] = tok
     env |= {n: os.environ[n] for n in rn.env if n in os.environ and n not in env}
     env |= {n: os.environ[n] for n in (opts.get("env") or []) if n in os.environ and n not in env}
     if "GITHUB_TOKEN" in env:
@@ -533,6 +605,36 @@ def _wants_auth_files(opts, harness, rn):
     return any(x in aliases for x in raw)
 
 
+def _env_domains(config, env_name):
+    """Network domains declared on `environments.<env_name>.domains`, for allowlisting executors."""
+    return tuple(((config.get("environments") or {}).get(env_name) or {}).get("domains") or ())
+
+
+def _should_run_setup(ex):
+    """Whether runtime environment/role setup scripts should run for `ex` (`setup: auto|true|false`)."""
+    opts = getattr(ex, "options", {}) or {}
+    mode = opts.get("setup", "auto")
+    if mode in (False, "off", "false", "baked", "none"):
+        return False
+    if mode == "auto" and getattr(ex, "name", None) == "docker" and opts.get("network") == "none":
+        return False
+    return True
+
+
+def _local_workspace_note(team_dir, skill_dir, others, isolated):
+    """Tell the agent where local skills, team files, setup tools, and additional checkouts live."""
+    lines_note = [f"- Factory team files (`roles/<role>/instructions.md`, `lessons/`, `skills/`): `{team_dir}`"]
+    if isolated:
+        lines_note.append(f"- Role skills are installed in `~/.agents/skills` and `{skill_dir}` inside the checkout.")
+    else:
+        lines_note.append(f"- Role skills are installed in `{skill_dir}` inside the checkout (use `{skill_dir}/<skill>/SKILL.md` "
+                          f"and scripts inside `{skill_dir}/<skill>/` when instructions mention `~/.agents/skills/<skill>` or `skills/<skill>`).")
+    lines_note.append("- Tools installed by environment and role setup scripts are on `PATH` (`~/.local/bin`).")
+    if others:
+        lines_note.append(f"- Other ticket repository checkouts:{others}")
+    return "\n\n## Local workspace\n\n" + "\n".join(lines_note)
+
+
 def teardown_active():
     """Tear down every currently active isolated sandbox (called on abort / second signal)."""
     with _ACTIVE_LOCK:
@@ -548,15 +650,18 @@ def teardown_active():
 def run_isolated(entry, payload, state, config, node, event, run, ex):
     """The same run as `run_event`, with the workspace inside the executor's sandbox (ADR-0029): host-side read-only
     pre-check so `no-go` events skip sandbox boot, then clone from remotes, `git worktree add`, copy in the engine,
-    team and skills, `begin`, the harness (streaming `harness.log` live), then the host exports the branch bundle,
-    pushes and opens the PR. Run files are collected before teardown."""
+    team and skills, `begin`, run setup scripts, write `.mcp.json`, run the harness (streaming `harness.log` live),
+    then the host exports the branch bundle, pushes and opens the PR. Run files are collected before teardown."""
     repos = {r["name"]: r for r in config["repositories"]}
     primary = next(r["name"] for r in config["repositories"] if r.get("role") == "primary")
     pr, issue = payload.get("pull_request") or {}, payload.get("issue") or {}
     ticket = ticket_from_ref((pr.get("head") or {}).get("ref")) or issue.get("number") or pr.get("number") or "schedule"
     harness = role_harness(config, node["role"], entry["focus"], entry["tier"])
     rn, write = runner(harness, config), entry["output"] in WRITE_OUTPUTS
-    env = box_env(ex, rn)
+    ex_opts = getattr(ex, "options", {}) or {}
+    mapped_gh_var = (ex_opts.get("secrets") or {}).get("GITHUB_TOKEN")
+    used_gh_fallback = bool(ex_opts.get("github_token_from_gh")) and (not mapped_gh_var or mapped_gh_var not in os.environ)
+    env = box_env(ex, rn, run=run)
     if "GITHUB_TOKEN" not in env:
         return (f"config: executor {ex.name} has no GITHUB_TOKEN: map a scoped token, "
                 f"`executors.<name>.secrets: {{GITHUB_TOKEN: <host variable>}}`")
@@ -564,17 +669,25 @@ def run_isolated(entry, payload, state, config, node, event, run, ex):
     pre = sh(run, [*FACTORY, "--team", state["factory"], "begin", "--check-only", entry["automation"], str(event.resolve())])
     if pre.returncode == 10:
         return "no-go"
+    try:
+        sources = role_skill_entries(node["role"], fetcher=team_setup.fetch if run is subprocess.run else None)
+    except (RuntimeError, ValueError, OSError) as e:
+        return f"setup failed: {e}"[-300:]
     rid = f"{ticket}-{int(time.time())}-{next(_RUN_SEQ)}"
     runs = Path(".factory/runs") / rid
     log_path = runs / "harness.log"
+    env_name = node.get("env")
+    extra_allow = tuple(dict.fromkeys([*getattr(rn, "api_hosts", ()), *_env_domains(config, env_name)]))
     try:
-        handle = ex.prepare(rid, extra_allow=getattr(rn, "api_hosts", ()))
+        handle = ex.prepare(rid, extra_allow=extra_allow)
     except (RuntimeError, OSError) as e:
         return f"checkout failed: {e}"[-300:]
     with _ACTIVE_LOCK:
         _ACTIVE_HANDLES[rid] = (ex, handle)
     runs.mkdir(parents=True, exist_ok=True)
     log_header = ["# harness log"]
+    if used_gh_fallback:
+        log_header.append("# warning: using host `gh auth token` fallback (github_token_from_gh: true)")
     box_paths = dict(BOX)
     try:
         if hasattr(ex, "inject_secrets"):
@@ -584,22 +697,31 @@ def run_isolated(entry, payload, state, config, node, event, run, ex):
         box_paths = _box_paths(ex, handle, env)
         env["FACTORY_TEAM"] = box_paths["team"]
 
-        def box(argv, cwd=None, **kw):
-            return ex.exec(handle, argv, cwd=cwd, env=env)
+        def box(argv, cwd=None, extra_env=None, **kw):
+            return ex.exec(handle, argv, cwd=cwd, env={**env, **(extra_env or {})}, **kw)
+
         tree = lambda name: f"{box_paths['work']}/{ticket}/{name}"  # noqa: E731
         event_dst = f"{box_paths['work']}/event.json"
+        box_path_prefix = f'PATH="{box_paths["home"]}/bin:{box_paths["home"]}/.local/bin:$PATH"'
         with tempfile.TemporaryDirectory() as tmp:
             stage = Path(tmp)
             shutil.copytree(config_mod.engine_root(), stage / "engine", ignore=STAGE_IGNORE)
             shutil.copytree(config_mod.team_root(), stage / "team", ignore=STAGE_IGNORE)
             skills_dir = stage / "skills"
             skills_dir.mkdir()
-            for src in role_skill_sources(node["role"]):
-                shutil.copytree(src, skills_dir / src.name, dirs_exist_ok=True)
-            for src, dst in ((stage / "engine", box_paths["engine"]), (stage / "team", box_paths["team"]), (event, event_dst)):
+            for name, src in sources:
+                shutil.copytree(src, skills_dir / name, dirs_exist_ok=True)
+            for src, dst in ((stage / "engine", box_paths["engine"]), (stage / "team", box_paths["team"]),
+                             (skills_dir, f"{box_paths['home']}/.agents/skills"), (event, event_dst)):
                 ex.put(handle, src, dst)
+            if hasattr(ex, "make_writable"):
+                ex.make_writable(handle, f"{box_paths['home']}/.agents/skills")
             bootstrap = (
-                f"mkdir -p {box_paths['home']}/bin {box_paths['repos']} {box_paths['work']}/{ticket} && "
+                f"mkdir -p {box_paths['home']}/bin {box_paths['home']}/.local/bin {box_paths['home']}/.agents/skills "
+                f"{box_paths['repos']} {box_paths['work']}/{ticket} && "
+                f"ln -sfn {shlex.quote(box_paths['team'])} {shlex.quote(box_paths['home'] + '/factory-team')} && "
+                f"for d in {shlex.quote(box_paths['home'] + '/.agents/skills')} {shlex.quote(box_paths['team'])}; do "
+                f"[ -d \"$d\" ] && find \"$d\" -type f \\( -name '*.sh' -o -name '*.py' \\) -exec chmod +x {{}} + 2>/dev/null || true; done && "
                 f"cat <<'EOF' > {box_paths['home']}/bin/factory\n"
                 f"#!/bin/sh\n"
                 f"if python3 -c 'import yaml, jinja2' 2>/dev/null; then\n"
@@ -642,7 +764,8 @@ def run_isolated(entry, payload, state, config, node, event, run, ex):
             if error:
                 return error
             fx = [f"{box_paths['home']}/bin/factory", "--team", box_paths["team"]]
-            begin = box([*fx, "begin", entry["automation"], event_dst], cwd=tree(primary))
+            begin = box(["sh", "-c", f'{box_path_prefix}; exec "$@"', "sh", *fx, "begin", entry["automation"], event_dst],
+                        cwd=tree(primary))
             if begin.returncode == 10:
                 return "no-go"
             if begin.returncode:
@@ -661,15 +784,54 @@ def run_isolated(entry, payload, state, config, node, event, run, ex):
                                       else add_tree(name, start, branch if write else None))
                     if error:
                         return error
+            if definition.present(config_mod.team_root()):
+                defn = definition.load(config_mod.team_root())
+                scripts = team_setup.setup_scripts(defn, env_name, node["role"])
+                if scripts:
+                    if _should_run_setup(ex):
+                        fp = team_setup.scripts_fingerprint(scripts, config_mod.team_root())
+                        marker = f"{box_paths['home']}/.factory-setup/{fp}"
+                        if box(["test", "-f", marker]).returncode != 0:
+                            primary_repo = definition.full_name(repos[primary]["url"])
+                            for script in scripts:
+                                rel_script = script.relative_to(config_mod.team_root()).as_posix()
+                                done_setup = box(["sh", "-c", f'{box_path_prefix}; exec bash "$1"', "sh", rel_script],
+                                                 cwd=box_paths["team"], extra_env={"FACTORY_NODE_REPO": primary_repo},
+                                                 log_file=log_path)
+                                if done_setup.returncode:
+                                    return f"setup failed: {(done_setup.stdout + done_setup.stderr).strip()[-300:]}"
+                            box(["sh", "-c", f'mkdir -p {shlex.quote(box_paths["home"] + "/.factory-setup")} && : > {shlex.quote(marker)}'])
+                    else:
+                        opts = getattr(ex, "options", {}) or {}
+                        with open(log_path, "a", encoding="utf-8") as fh:
+                            fh.write(f"# note: skipped runtime setup scripts (setup={opts.get('setup', 'auto')}, "
+                                     f"network={opts.get('network', 'default')})\n")
+                mcp_stage = stage / "mcp"
+                mcp_stage.mkdir()
+                if team_setup.write_mcp_json(defn, mcp_stage, entry["node"]):
+                    ex.put(handle, mcp_stage / ".mcp.json", f"{tree(primary)}/.mcp.json")
+                    box(["sh", "-c", f'cd {shlex.quote(tree(primary))} && ex="$(git rev-parse --git-path info/exclude)" && '
+                         f'mkdir -p "$(dirname "$ex")" && grep -qxF ".mcp.json" "$ex" 2>/dev/null || echo ".mcp.json" >> "$ex"'])
             others = "".join(f"\n- `{n}`: `{tree(n)}`" for n in names if n != primary)
-            prompt = deploy_mod.agent_prompt(entry["node"], node, config, entry["automation"], entry["focus"]) + (
-                f"\n\nThe ticket's other repositories are checked out on its branch:{others}" if others else "")
+            prompt = deploy_mod.agent_prompt(entry["node"], node, config, entry["automation"], entry["focus"]) + _local_workspace_note(
+                box_paths["team"], rn.skill_dir, others, isolated=True)
             target = f"{tree(primary)}/{rn.skill_dir}"
             ex.put(handle, skills_dir, target)
-            exclude_line = f"{rn.skill_dir.split('/')[0]}/skills/"
-            box(["sh", "-c", f'cd {tree(primary)} && ex="$(git rev-parse --git-path info/exclude)" && '
-                 f'mkdir -p "$(dirname "$ex")" && grep -qxF "{exclude_line}" "$ex" 2>/dev/null || echo "{exclude_line}" >> "$ex"'])
-            argv = ["sh", "-c", f'PATH="{box_paths["home"]}/bin:$PATH"; exec "$@"', "sh", *rn.command(prompt, local_model(config, entry["tier"]), write)]
+            if rn.skill_dir == ".claude/skills":
+                box(["sh", "-c",
+                     f'mkdir -p {shlex.quote(box_paths["home"] + "/.claude/skills")} && '
+                     f'for s in {shlex.quote(box_paths["home"] + "/.agents/skills")}/*; do '
+                     f'[ -d "$s" ] && ln -sfn "$s" {shlex.quote(box_paths["home"] + "/.claude/skills")}/"$(basename "$s")"; done'])
+            skill_excludes = " ".join(shlex.quote(f"{rn.skill_dir}/{name}/") for name, _ in sources)
+            default_exclude = shlex.quote(f"{rn.skill_dir.split('/')[0]}/skills/")
+            box(["sh", "-c",
+                 f'cd {shlex.quote(tree(primary))} && ex="$(git rev-parse --git-path info/exclude)" && '
+                 f'mkdir -p "$(dirname "$ex")" && '
+                 f'if [ -n "$(git ls-files {shlex.quote(rn.skill_dir)})" ]; then '
+                 f'for line in {skill_excludes}; do grep -qxF "$line" "$ex" 2>/dev/null || echo "$line" >> "$ex"; done; '
+                 f'else grep -qxF {default_exclude} "$ex" 2>/dev/null || echo {default_exclude} >> "$ex"; fi'])
+            argv = ["sh", "-c", f'{box_path_prefix}; exec "$@"', "sh",
+                    *rn.command(prompt, local_model(config, entry["tier"]), write, isolated=True)]
             done = ex.exec(handle, argv, cwd=tree(primary), env=env, timeout=node_timeout(node), log_file=log_path)
             if done.returncode:
                 return f"harness failed: {(done.stdout + done.stderr).strip()[-300:]}"
@@ -741,14 +903,39 @@ def run_event(entry, payload, state, config, graph, run):
                              branch if write else None)
             if error:
                 return f"checkout failed: {error[-300:]}"
+        try:
+            sources = role_skill_entries(node["role"], fetcher=team_setup.fetch if run is subprocess.run else None)
+        except (RuntimeError, ValueError, OSError) as e:
+            return f"setup failed: {e}"[-300:]
+        host_env = {**os.environ, "FACTORY_TEAM": state["factory"],
+                    "PATH": f"{Path.home() / '.local/bin'}:{os.environ.get('PATH', '')}"}
+        if definition.present(config_mod.team_root()):
+            defn = definition.load(config_mod.team_root())
+            scripts = team_setup.setup_scripts(defn, node.get("env"), node["role"])
+            if scripts and _should_run_setup(ex):
+                fp = team_setup.scripts_fingerprint(scripts, config_mod.team_root())
+                setup_key = f"{node.get('env')}:{node['role']}"
+                done_map = json.loads(SETUP_STATE.read_text()) if SETUP_STATE.exists() else {}
+                if done_map.get(setup_key) != fp:
+                    primary_repo = definition.full_name(repos[primary]["url"])
+                    setup_env = {**host_env, "FACTORY_NODE_REPO": primary_repo}
+                    for script in scripts:
+                        res = sh(run, ["bash", str(script)], cwd=state["factory"], env=setup_env)
+                        if res.returncode:
+                            return f"setup failed: {(res.stdout + res.stderr).strip()[-300:]}"
+                    done_map[setup_key] = fp
+                    save(SETUP_STATE, done_map)
+            if team_setup.write_mcp_json(defn, trees[primary], entry["node"]):
+                _exclude_in_worktree(run, trees[primary], [".mcp.json"])
         others = "".join(f"\n- `{name}`: `{path}`" for name, path in trees.items() if name != primary)
-        prompt = deploy_mod.agent_prompt(entry["node"], node, config, entry["automation"], entry["focus"]) + (
-            f"\n\nThe ticket's other repositories are checked out on its branch:{others}" if others else "")
         model = local_model(config, entry["tier"])
         harness = role_harness(config, node["role"], entry["focus"], entry["tier"])
-        install_skills(run, node["role"], harness, trees[primary])
-        done = ex.exec(None, runner(harness, config).command(prompt, model, write), cwd=trees[primary],
-                       env={**os.environ, "FACTORY_TEAM": state["factory"]}, timeout=node_timeout(node))
+        rn = runner(harness, config)
+        prompt = deploy_mod.agent_prompt(entry["node"], node, config, entry["automation"], entry["focus"]) + _local_workspace_note(
+            state["factory"], rn.skill_dir, others, isolated=False)
+        install_skills(run, node["role"], harness, trees[primary], sources=sources)
+        done = ex.exec(None, rn.command(prompt, model, write, isolated=False), cwd=trees[primary],
+                       env=host_env, timeout=node_timeout(node))
         if done.returncode:
             return f"harness failed: {(done.stdout + done.stderr).strip()[-300:]}"
         if not write or not branch:
@@ -764,7 +951,7 @@ def run_event(entry, payload, state, config, graph, run):
 
 # Failures before any harness started are tried on the next polls, up to TRIES runs in all; a run that started
 # is not repeated, as on Air (reconcile adds the label again, which is a new event).
-RETRIED, TRIES = ("begin failed", "checkout failed", "sweep failed", "error"), 3
+RETRIED, TRIES = ("begin failed", "checkout failed", "setup failed", "sweep failed", "error"), 3
 
 
 def save(path, value):

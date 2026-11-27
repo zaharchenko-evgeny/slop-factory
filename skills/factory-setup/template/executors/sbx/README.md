@@ -31,6 +31,8 @@ executors:
   sbx:
     type: docker-sandbox
     dockerfile: executors/sbx/Dockerfile   # built & loaded into sbx once per file hash (uses `--pull never`)
+    # context: .                           # optional build context dir (e.g. `.` to COPY environments/setup.sh)
+    # setup: auto                          # auto | true | false (set false when tools are baked into the Dockerfile)
     # template: registry.example/factory-sbx:1  # alternative: a published OCI ref (no local docker needed)
     sbx_version: "0.54.1"                  # pin the CLI version; `factory deploy` checks it
     cpus: 2
@@ -61,7 +63,8 @@ executors:
 - **Secrets:** export a scoped GitHub token (issues and pull requests write, contents read only — never `gh auth token`) under a separate variable such as `FACTORY_SANDBOX_GH_TOKEN`, plus your harness API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.).
   - By default (`secrets_mode: auto`), the executor injects `github`, `anthropic`, and `openai` per sandbox via `sbx secret set <service> --sandbox <name> --force` over stdin so the host proxy injects auth headers and raw tokens stay out of the VM (`GH_TOKEN` uses `sbx`'s sentinel; model API keys pass `proxy-managed` as a non-secret sentinel).
   - If `sbx secret set` fails for a service (or you set `secrets_mode: env`), it falls back to `sbx exec -e` (value passed via process env, never argv, though readable inside the VM) and logs a warning.
-- **Network:** every sandbox automatically allows `github.com`, `api.github.com`, and the active harness's model API host (`api.anthropic.com`, `api.openai.com`, `api.jetbrains.ai`), plus any hostnames in `network.allow`.
+- **Network:** every sandbox automatically allows `github.com`, `api.github.com`, the active harness's model API host (`api.anthropic.com`, `api.openai.com`, `api.jetbrains.ai`), and `environments.<env>.domains`, plus any hostnames in `network.allow`.
+- **Skills, setup & `.mcp.json`:** `factory.yaml` skills (local and sha256-verified `source:` skills) plus `factory-step` and `factory-troubleshoot` are copied into `~/.agents/skills` and the checkout's skill dir (`~/.local/bin` is added to `PATH`). `environments.<env>.setup` and `roles/<role>/setup.sh` run automatically inside the sandbox after `factory begin` (unless `setup: false`), and custom MCP entries are written to `.mcp.json` (git-excluded).
 
 ## 5. Smoke-test
 
