@@ -176,7 +176,7 @@ class FakeGh:
             want = a.split("labels=")[1].split("&")[0]
             on = want in self.labels and (self.state == "open" or "state=all" in a)
             return json.dumps({"number": 7}) if on else ""
-        if "/pulls/" in a and a.rsplit("/", 1)[-1].isdigit():
+        if "-X" not in args and "/pulls/" in a and "/reviews/" not in a and a.rsplit("/", 1)[-1].isdigit():
             number = int(a.rsplit("/", 1)[-1])
             return recorded_pull(a, {"number": number, "merged": self.merged, "state": "closed" if self.merged else "open", "merged_at": None, "mergeable": True, "merge_commit_sha": None, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
                                      "requested_reviewers": [{"login": u} for u in self.requested],
@@ -188,8 +188,10 @@ class FakeGh:
         if "pulls?state=closed" in a:
             return json.dumps([json.loads(x) for x in recorded_pull(a, getattr(self, "recent_pulls", [])).splitlines()])
         if "/compare/" in a:
-            return recorded_pull(a, {"behind_by": getattr(self, "behind_by", 0),
-                                     "files": [{"filename": x} for x in getattr(self, "files", [])]})
+            files = getattr(self, "file_patches", None)
+            if files is None:
+                files = [{"filename": x} for x in getattr(self, "files", [])]
+            return recorded_pull(a, {"behind_by": getattr(self, "behind_by", 0), "files": files})
         if "/commits/" in a:
             return recorded_pull(a, {"commit": {"committer": {"date": getattr(self, "head_date", "2026-01-02T00:00:00Z")}}})
         if "/collaborators/" in a:
@@ -244,6 +246,12 @@ class FakeGh:
                                  "repository_url": getattr(self, "sub_repos", {}).get(t, f"https://api.github.com/repos/{REPO}")}
                                 for i, (t, st, r, ls) in enumerate(zip(self.sub, self.sub_state, reasons, labels))])
         self.writes.append(args)
+        if "--input" in args:
+            payload = json.loads(Path(args[args.index("--input") + 1]).read_text())
+            self.inputs = getattr(self, "inputs", [])
+            self.inputs.append(payload)
+            if getattr(self, "review_422", False) and "/reviews" in a:
+                raise RuntimeError("gh api -X POST repos/o/r/pulls/5/reviews: HTTP 422: Unprocessable Entity")
         if self.fail_blocked_by and "/dependencies/blocked_by" in a:
             raise RuntimeError("HTTP 403: Resource not accessible by integration")
         if args[1] == "close":
@@ -880,10 +888,83 @@ class EffectsTest(unittest.TestCase):
                                          summary="Close.", findings=found, run_id="r9")))
         body = gh.writes[0][-1].removeprefix("body=")
         self.assertEqual(body.split("\n\n")[0], "[factory]\nClose.")
-        self.assertLess(body.index("**B1** b.py:9 — crashes on empty"), body.index("**M1** a.py:2 — name it"))
+        self.assertIn("### Blocking", body)
+        self.assertIn("### Minor", body)
+        b1 = "**B1** [`b.py:9`](https://github.com/o/r/blob/h1/b.py#L9) — crashes on empty"
+        m1 = "**M1** [`a.py:2`](https://github.com/o/r/blob/h1/a.py#L2) — name it"
+        self.assertLess(body.index(b1), body.index(m1))
         self.assertTrue(body.endswith("Factory-Run: r9"))
         gh = FakeGh(reviews=[review(BOT, body)])  # the longer body still parses
-        self.assertEqual(tr(gh).facts(7)["reviews"][0]["verdict"], "changes")
+        parsed = tr(gh).facts(7)["reviews"][0]
+        self.assertEqual(parsed["verdict"], "changes")
+        self.assertEqual(parsed["findings"], ["B1", "M1"])
+
+    def test_review_posts_inline_comments_for_diff_lines_and_keeps_off_diff_in_body(self):
+        gh = FakeGh()
+        gh.file_patches = [{"filename": "b.py", "patch": "@@ -7,2 +7,6 @@\n ctx\n+line8\n+line9\n+line10\n+line11\n"}]
+        found = [
+            {"id": "B1", "file": "b.py:9", "finding": "Null crash\n- Why it breaks: empty input.\n- Fix: guard.", "severity": "blocking"},
+            {"id": "M1", "file": "b.py:9-11", "finding": "Tighten loop", "severity": "minor"},
+            {"id": "B2", "file": "other.py:4", "finding": "Unchanged file finding", "severity": "blocking"},
+            {"id": "M2", "file": "docs/readme.md", "finding": "File-level note", "severity": "minor"},
+        ]
+        self.assertTrue(tr(gh).apply(eff("review", "request-changes-at-head", focus="full", round=1,
+                                         summary="Two issues.", findings=found, run_id="r1")))
+        self.assertEqual(len(gh.inputs), 1)
+        sent = gh.inputs[0]
+        self.assertEqual(sent["commit_id"], "h1")
+        self.assertEqual(sent["event"], "COMMENT")
+        self.assertEqual([(c["path"], c.get("start_line"), c["line"], c["side"]) for c in sent["comments"]],
+                         [("b.py", None, 9, "RIGHT"), ("b.py", 9, 11, "RIGHT")])
+        self.assertIn("**B1** (blocking) — Null crash", sent["comments"][0]["body"])
+        self.assertIn("**M1** (minor) — Tighten loop", sent["comments"][1]["body"])
+        # Body indexes inline findings compactly and keeps full text for off-diff/file-level findings
+        body = sent["body"]
+        self.assertIn("**B1** [`b.py:9`](https://github.com/o/r/blob/h1/b.py#L9) — Null crash *(inline)*", body)
+        self.assertNotIn("- Why it breaks: empty input.", body)
+        self.assertIn("**B2** [`other.py:4`](https://github.com/o/r/blob/h1/other.py#L4) — Unchanged file finding", body)
+        self.assertIn("**M2** [`docs/readme.md`](https://github.com/o/r/blob/h1/docs/readme.md) — File-level note", body)
+        # Gate parser still sees every finding id from the review body with no extra API reads
+        parsed = tr(FakeGh(reviews=[review(BOT, body)])).facts(7)["reviews"][0]
+        self.assertEqual(parsed["findings"], ["B1", "B2", "M1", "M2"])
+
+    def test_review_falls_back_to_body_on_422_from_inline_comments(self):
+        gh = FakeGh()
+        gh.file_patches = [{"filename": "b.py", "patch": "@@ -1,0 +1,3 @@\n+x\n+y\n+z\n"}]
+        gh.review_422 = True
+        found = [{"id": "B1", "file": "b.py:2", "finding": "Broken\n- Fix: change y", "severity": "blocking"}]
+        self.assertTrue(tr(gh).apply(eff("review", "request-changes-at-head", focus="full", round=1,
+                                         summary="Fix needed.", findings=found)))
+        self.assertEqual(len(gh.writes), 2)
+        self.assertIn("--input", gh.writes[0])
+        fallback_body = gh.writes[1][-1].removeprefix("body=")
+        self.assertIn("- Fix: change y", fallback_body)
+        self.assertNotIn("*(inline)*", fallback_body)
+
+    def test_review_collapses_superseded_same_focus_reviews(self):
+        old_same = {**review(BOT, "**B1** x.py:1 — bug\n\n" + M.replace("approve", "changes"), commit="h0"), "id": 101}
+        old_other = {**review(BOT, "**B2** y.py:1 — sec\n\n" + M.replace("full", "structure-security").replace("approve", "changes"), commit="h0"), "id": 102}
+        already = {**review(BOT, "<details><summary>Superseded by review at h0</summary>\n\n" + M + "\n\n</details>", commit="h_old"), "id": 103}
+        gh = FakeGh(reviews=[old_same, old_other, already])
+        self.assertTrue(tr(gh).apply(eff("review", "approve-at-head", focus="full", summary="Looks good.")))
+        puts = [w for w in gh.writes if "PUT" in w]
+        self.assertEqual(len(puts), 1)
+        self.assertIn("repos/o/r/pulls/5/reviews/101", puts[0])
+        collapsed = puts[0][-1].removeprefix("body=")
+        self.assertTrue(collapsed.startswith("<details><summary>Superseded by review at h1</summary>\n\n"))
+        self.assertTrue(collapsed.endswith("\n\n</details>"))
+        # Collapsed review still parses cleanly for verdict, findings, and fix_rounds
+        parsed = tr(FakeGh(reviews=[review(BOT, collapsed, commit="h0")])).facts(7)
+        self.assertEqual(parsed["reviews"][0]["verdict"], "changes")
+        self.assertEqual(parsed["reviews"][0]["findings"], ["B1"])
+        self.assertEqual(parsed["fix_rounds"], 1)
+
+    def test_parse_location_and_diff_right_lines(self):
+        self.assertEqual(M_GH.parse_location("a/b.py:42"), ("a/b.py", None, 42))
+        self.assertEqual(M_GH.parse_location("./a/b.py:10-20"), ("a/b.py", 10, 20))
+        self.assertEqual(M_GH.parse_location("a/b.py"), ("a/b.py", None, None))
+        self.assertEqual(M_GH.parse_location("[`a.py:1`](https://example.com)"), (None, None, None))
+        self.assertEqual(M_GH.diff_right_lines("@@ -1,3 +10,3 @@\n ctx\n-del\n+add1\n+add2\n"), {10, 11, 12})
 
     def test_review_apply_adds_no_fix_label(self):
         for name in ("review-low", "review-high"):
@@ -1228,10 +1309,12 @@ class EffectsTest(unittest.TestCase):
 
         gh.head_sha = "h2"
         tracker.apply(eff("review", "request-changes-at-head", focus="full"))
-        self.assertIn("round=2", gh.writes[-1][-1])
+        posts = [w for w in gh.writes if "POST" in w]
+        self.assertIn("round=2", posts[-1][-1])
         gh.reviews.append(review(BOT, M.replace("approve", "changes"), commit="h2"))
         tracker.apply(eff("review", "request-changes-at-head", focus="structure-security"))
-        self.assertIn("round=2", gh.writes[-1][-1])
+        posts = [w for w in gh.writes if "POST" in w]
+        self.assertIn("round=2", posts[-1][-1])
 
     def test_fork_pr_is_ignored(self):
         self.assertEqual(tr(FakeGh()).facts(7)["pr"], 5)
