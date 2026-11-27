@@ -23,6 +23,8 @@ executors:
   box:
     type: docker
     dockerfile: executors/box/Dockerfile   # in the team repository; built once per file content
+    # context: .                           # optional build context dir (e.g. `.` to COPY environments/setup.sh)
+    # setup: auto                          # auto | true | false (auto skips runtime setup.sh when network: none)
     secrets: {GITHUB_TOKEN: FACTORY_SANDBOX_GH_TOKEN}   # sandbox name: host variable name
     cpus: 2
     memory: 4g
@@ -54,8 +56,7 @@ Names only, never values, go in YAML. A machine override in the git-ignored `.fa
    `github`, `anthropic` and `openai` are injected per sandbox with `sbx secret set --sandbox --force` over stdin by
    default (`secrets_mode: auto`), falling back to `sbx exec -e` with a warning if unavailable.
 4. Add the executor and a local surface as above; run `factory validate`.
-5. `factory deploy --surface laptop` probes the executor, verifies mapped secrets, and runs `<cli> --version` inside it
-   for each harness (one shared sandbox per executor). Fix every `missing` line, then `--apply`.
+5. `factory deploy --surface laptop` probes the executor, verifies `git` and `gh`, checks mapped secrets (and warns about unmapped required `env:` variables), pre-warms sourced skills, and runs `<cli> --version` inside it for each harness (one shared sandbox per executor). Fix every `missing` line, then `--apply`.
 6. Start and stop surfaces uniformly with `factory start` and `factory stop`:
    - Local surface: `factory start --surface laptop` starts the polling loop in the background (PID in `.factory/local/laptop.pid`, log in `.factory/local/laptop.log`; pass `--foreground` or use `factory run --local --surface laptop` for foreground). `factory stop --surface laptop` drains in-flight runs cleanly (`--force` aborts and tears down active sandboxes).
    - Air surface: `factory start --surface air` enables deployed automations (`paused: false`); `factory stop --surface air` disables them (`paused: true`). Supports `--dry-run` and `--only`.
@@ -64,19 +65,12 @@ Names only, never values, go in YAML. A machine override in the git-ignored `.fa
 
 - **`host` executor:** any harness already installed and logged in on your machine (`codex`, `junie`, `pi`, `claude`) works directly with zero extra secret exports — it inherits your shell environment, `gh` auth, and `~/.codex`, `~/.junie`, `~/.pi`, `~/.claude` logins.
 - **Isolated executors (`docker` / `docker-sandbox`):**
-  - Export a scoped `GITHUB_TOKEN` (mapped via `secrets: {GITHUB_TOKEN: FACTORY_SANDBOX_GH_TOKEN}`).
+  - Export a scoped `GITHUB_TOKEN` (mapped via `secrets: {GITHUB_TOKEN: FACTORY_SANDBOX_GH_TOKEN}`). For personal opt-in fallback to your local `gh` login when that variable is unset, set `github_token_from_gh: true` in your git-ignored `.factory/local.yaml` (emits a warning at deploy and in `harness.log`; on `docker-sandbox` it is still injected via host-side `sbx secret set github`).
   - To reuse already-authenticated host harness logins instead of exporting model API keys, set `auth_files: auto` (or `auth_files: [codex, junie, pi, claude-code]`) on the executor. Both `docker` and `docker-sandbox` fix ownership inside the sandbox so the CLI can read/write its config. On `docker-sandbox`, you can also log in via `sbx secret set` host-side OAuth.
 
 ## How a run works
 
-Nothing is mounted. The sandbox clones each repository from its remote (reusing `/repos/<name>` if baked in as a seed
-layer), makes the worktrees with `git worktree add`, gets the engine, team files and skills copied in, runs `factory begin`
-and the harness, and is removed. The host then exports only the committed branch diff (`origin/<base>..branch`) as a
-bundle, pushes it and opens the PR with its own credentials; push rights never enter the sandbox. Unpushed commits in your
-checkout are invisible, as on Air. Run files and the harness log land in `.factory/runs/<id>/`, also after a failure or
-timeout (on timeout, the container or microVM is stopped before `collect`, then removed in `teardown`). A timeout is exit
-124 and a failed run. Orphaned containers and `sbx` sandboxes older than `timeout + 10 minutes` are cleaned up
-automatically by `reconcile` on startup and periodically while the loop runs.
+Nothing is mounted. On the host, sourced skills (`source:` in `factory.yaml`) are fetched, sha256-verified, and cached in `.factory/cache/skills/`. Inside the sandbox, the executor clones each repository from its remote (reusing `/repos/<name>` if baked in as a seed layer), makes the worktrees with `git worktree add`, copies in the engine, team files (`~/factory-team`), and role + engine skills (`~/.agents/skills` and the harness's project skill dir without hiding tracked repo skills), runs `factory begin`, runs `environments.<env>.setup` and `roles/<role>/setup.sh` (unless `setup: false` or `docker` with `network: none`; tools land in `~/.local/bin` which is put on `PATH`), writes `.mcp.json` for custom MCP entries, and starts the harness. On `docker-sandbox`, `environments.<env>.domains` are added to the sandbox network allowlist alongside GitHub and the harness model API. On `host`, `setup.sh` runs once per script fingerprint (cached in `.factory/local/setup-done.json`) with `~/.local/bin` on `PATH`. The host then exports only the committed branch diff (`origin/<base>..branch`) as a bundle, pushes it and opens the PR with its own credentials; push rights never enter the sandbox. Unpushed commits in your checkout are invisible, as on Air. Run files and the harness log land in `.factory/runs/<id>/`, also after a failure or timeout (on timeout, the container or microVM is stopped before `collect`, then removed in `teardown`). A timeout is exit 124 and a failed run. Orphaned containers and `sbx` sandboxes older than `timeout + 10 minutes` are cleaned up automatically by `reconcile` on startup and periodically while the loop runs.
 
 ## Validation codes
 

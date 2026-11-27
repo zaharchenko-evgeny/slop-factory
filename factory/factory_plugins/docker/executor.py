@@ -25,12 +25,12 @@ def _decode(data):
 CONTEXT_SKIP = {".git", "__pycache__", ".venv", "node_modules", ".factory"}
 
 
-def _context_hash(df: Path) -> str:
+def _context_hash(df: Path, ctx_root: Path | None = None) -> str:
     """SHA-256 over the Dockerfile and every file in its build context directory, so `COPY` changes bust the cache."""
     h = hashlib.sha256()
     h.update(b"dockerfile\0")
     h.update(df.read_bytes())
-    root = df.parent
+    root = ctx_root or df.parent
     if root.is_dir():
         for path in sorted(p for p in root.rglob("*") if p.is_file() and p != df
                            and not (CONTEXT_SKIP & set(p.relative_to(root).parts))):
@@ -71,10 +71,11 @@ class Executor:
         if o.get("image"):
             return o["image"]
         df = _resolve_dockerfile(o["dockerfile"])
-        tag = "factory-exec-" + _context_hash(df)
+        ctx_root = _resolve_dockerfile(o["context"]) if o.get("context") else df.parent
+        tag = "factory-exec-" + _context_hash(df, ctx_root)
         with _BUILD_LOCK:
             if self.docker("image", "inspect", tag).returncode:
-                built = self.docker("build", "-t", tag, "-f", str(df), str(df.parent))
+                built = self.docker("build", "-t", tag, "-f", str(df), str(ctx_root))
                 if built.returncode:
                     raise RuntimeError(f"docker build failed: {(built.stderr or built.stdout)[-300:]}")
         return tag
@@ -181,6 +182,8 @@ class Executor:
             return [ProbeResult("executor:docker", "missing", "set `image` or `dockerfile`")]
         if o.get("dockerfile") and not _resolve_dockerfile(o["dockerfile"]).exists():
             return [ProbeResult("executor:docker", "missing", f"dockerfile {o['dockerfile']} does not exist")]
+        if o.get("context") and not _resolve_dockerfile(o["context"]).is_dir():
+            return [ProbeResult("executor:docker", "missing", f"context {o['context']} does not exist")]
         if o.get("network") not in (None, "default", "none"):
             return [ProbeResult("executor:docker", "missing", f"network {o['network']!r}: `docker` supports default or none; an allowlist needs `docker-sandbox`")]
         return [ProbeResult("executor:docker", "ok", "docker is reachable")]

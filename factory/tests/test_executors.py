@@ -139,6 +139,25 @@ class DockerTest(unittest.TestCase):
         self.assertTrue(Docker({"image": "i"}, Fake()).probe(which)[0].ok)
         self.assertFalse(Docker({"image": "i"}, Fake()).probe(lambda n: None)[0].ok)
 
+    def test_context_option_sets_build_context_and_probes_missing_dir(self):
+        which = lambda n: "/usr/bin/docker"  # noqa: E731
+        with tempfile.TemporaryDirectory() as d:
+            ctx = Path(d)
+            (ctx / "executors/box").mkdir(parents=True)
+            df = ctx / "executors/box/Dockerfile"
+            df.write_text("FROM x\n")
+            (ctx / "environments").mkdir()
+            (ctx / "environments/setup.sh").write_text("echo v1\n")
+            run = Fake(fail=("inspect",))
+            tag1 = Docker({"dockerfile": str(df), "context": str(ctx)}, run).image()
+            build_cmd = next(c for c in run.calls if c[1] == "build")
+            self.assertEqual(build_cmd[-1], str(ctx))
+            (ctx / "environments/setup.sh").write_text("echo v2\n")
+            tag2 = Docker({"dockerfile": str(df), "context": str(ctx)}, Fake(fail=("inspect",))).image()
+            self.assertNotEqual(tag1, tag2)
+            self.assertTrue(Docker({"dockerfile": str(df), "context": str(ctx)}, Fake()).probe(which)[0].ok)
+            self.assertIn("context", Docker({"dockerfile": str(df), "context": str(ctx / "missing")}, Fake()).probe(which)[0].detail)
+
 
 class SandboxTest(unittest.TestCase):
     def test_prepare_creates_mountless_shell_sandbox_and_allows_github_plus_extra(self):
@@ -253,6 +272,42 @@ class SandboxTest(unittest.TestCase):
         run_json = Fake(out={"sbx ls --json": payload})
         self.assertEqual(Sandbox({}, run_json).reconcile(now=now), 1)
         self.assertEqual([c[3] for c in run_json.calls if c[1] == "rm"], ["factory-old"])
+
+    def test_put_merges_directory_via_temp_stage_and_handles_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            src_dir = Path(d) / "skills"
+            src_dir.mkdir()
+            src_file = Path(d) / "event.json"
+            src_file.write_text("{}")
+            run = Fake()
+            Sandbox({}, run).put("s", src_dir, "/home/agent/.agents/skills")
+            self.assertEqual(run.calls[0][:3], ["sbx", "cp", str(src_dir)])
+            self.assertIn("/tmp/factory-put-", run.calls[0][3])
+            self.assertEqual(run.calls[1][:3], ["sbx", "exec", "s"])
+            self.assertIn("/home/agent/.agents/skills", run.calls[1])
+            run2 = Fake()
+            Sandbox({}, run2).put("s", src_file, "/work/event.json")
+            self.assertEqual(run2.calls[0][-2:], ["-p", "/work"])
+            self.assertEqual(run2.calls[1], ["sbx", "cp", str(src_file), "s:/work/event.json"])
+
+    def test_context_option_sets_build_context_and_probes_missing_dir(self):
+        which = lambda n: f"/x/{n}"  # noqa: E731
+        with tempfile.TemporaryDirectory() as d:
+            ctx = Path(d)
+            (ctx / "executors/sbx").mkdir(parents=True)
+            df = ctx / "executors/sbx/Dockerfile"
+            df.write_text("FROM docker.io/sbx/shell-image:latest\n")
+            (ctx / "environments").mkdir()
+            (ctx / "environments/setup.sh").write_text("echo v1\n")
+            run = Fake(out={"version": "sbx 0.54.1", "sbx template ls": ""})
+            tag1, _ = Sandbox({"dockerfile": str(df), "context": str(ctx)}, run).template()
+            build_cmd = next(c for c in run.calls if c[:2] == ["docker", "build"])
+            self.assertEqual(build_cmd[-1], str(ctx))
+            (ctx / "environments/setup.sh").write_text("echo v2\n")
+            tag2, _ = Sandbox({"dockerfile": str(df), "context": str(ctx)}, Fake(out={"sbx template ls": ""})).template()
+            self.assertNotEqual(tag1, tag2)
+            self.assertTrue(Sandbox({"dockerfile": str(df), "context": str(ctx)}, run).probe(which)[0].ok)
+            self.assertIn("context", Sandbox({"dockerfile": str(df), "context": str(ctx / "nope")}, run).probe(which)[0].detail)
 
 
 if __name__ == "__main__":

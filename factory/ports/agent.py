@@ -27,7 +27,7 @@ class AgentRunner(Protocol):
     auth_files: tuple  # login files an executor copies in only when its instance lists `auth_files` (ADR-0029)
     api_hosts: tuple  # model API hostnames an allowlisting executor (`docker-sandbox`) opens automatically
 
-    def command(self, prompt: str, model: str, write: bool) -> list[str]:
+    def command(self, prompt: str, model: str, write: bool, isolated: bool = False) -> list[str]:
         """The argv of one headless run: `write` nodes get edit tools, read-only nodes none."""
 
     def probe(self, which=shutil.which) -> ProbeResult:

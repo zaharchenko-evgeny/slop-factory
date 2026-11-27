@@ -477,10 +477,10 @@ class RunLocalTest(unittest.TestCase):
 
 class RunnerTest(unittest.TestCase):
     """#1071: the harnesses are agent runner plugins (ports/agent.py)."""
-    TOOLS_RO = "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(factory:*)"
-    ARGV = {  # (harness, write) -> the argv `harness_argv` built before #1071, for model anthropic/claude-x
+    TOOLS_RO = "Skill,Read,Grep,Glob,Bash"
+    ARGV = {  # (harness, write) -> the argv `harness_argv` builds, for model anthropic/claude-x
         ("claude-code", True): ["claude", "-p", "P", "--output-format", "json", "--model", "claude-x", "--allowedTools",
-                                "Bash,Read,Edit,Write,Grep,Glob", "--permission-mode", "acceptEdits"],
+                                "Skill,Bash,Read,Edit,Write,Grep,Glob", "--permission-mode", "acceptEdits"],
         ("claude-code", False): ["claude", "-p", "P", "--output-format", "json", "--model", "claude-x", "--allowedTools", TOOLS_RO],
         ("codex", True): ["codex", "exec", "--json", "-m", "claude-x", "--sandbox", "workspace-write",
                           "-c", "sandbox_workspace_write.network_access=true", "P"],
@@ -493,6 +493,8 @@ class RunnerTest(unittest.TestCase):
             self.assertEqual(local.runner(harness).command("P", "anthropic/claude-x", write), want, harness)
         for harness in ("codex", "junie", "pi"):  # read-only nodes run the same argv in these harnesses
             self.assertEqual(local.runner(harness).command("P", "anthropic/claude-x", False), self.ARGV[(harness, True)])
+        self.assertEqual(local.runner("codex").command("P", "openai/gpt-6", True, isolated=True),
+                         ["codex", "exec", "--json", "-m", "gpt-6", "--dangerously-bypass-approvals-and-sandbox", "P"])
 
     def test_cli_and_skill_dir_per_harness(self):
         got = {h: (local.runner(h).cli, local.runner(h).skill_dir) for h in ("claude-code", "claude", "codex", "junie", "pi")}
@@ -768,6 +770,41 @@ class IsolatedRunTest(RunLocalTest):
         rows = [json.loads(x) for x in out.getvalue().splitlines()]
         self.assertEqual([r["event"] for r in rows][:1], ["labeled:108"])
 
+    def test_docker_setup_auto_skips_when_network_none_and_respects_setup_false(self):
+        team = Path(self.tmp.name) / "team_setup_test"
+        shutil.copytree(FIXTURE, team)
+        (team / "environments").mkdir()
+        (team / "environments/setup.sh").write_text("#!/bin/sh\necho env\n")
+        fy = yaml.safe_load((team / "factory.yaml").read_text())
+        fy["environments"]["engine"]["setup"] = "environments/setup.sh"
+        (team / "factory.yaml").write_text(yaml.safe_dump(fy, sort_keys=False))
+        cfg.set_team(team)
+        real = cfg.load
+
+        # network: none + setup: auto -> skips setup
+        with unittest.mock.patch.object(cfg, "load", lambda: {
+            **real(),
+            "executors": {"box": {"type": "docker", "image": "img", "secrets": {"GITHUB_TOKEN": "FACTORY_TEST_TOKEN"}, "network": "none"}},
+            "targets": {**real()["targets"], "local": {**real()["targets"]["local"], "executor": "box", "models": {"luna": "anthropic/claude-x", "sonnet": "anthropic/claude-x", "sol": "anthropic/claude-x"}}},
+        }):
+            gh = GitHub(issues={"factory:implement-medium": [{"number": 7}]})
+            self.assertEqual(self.run_local(gh)[1][0]["result"], "pushed")
+            self.assertFalse(any("setup.sh" in " ".join(a) for _, a in gh.calls))
+            logs = list(Path(".factory/runs").glob("*/harness.log"))
+            self.assertTrue(any("skipped runtime setup scripts" in p.read_text() for p in logs))
+
+        # setup: false on network: default + codex -> skips setup and uses isolated=True for codex
+        with unittest.mock.patch.object(cfg, "load", lambda: {
+            **real(),
+            "executors": {"box": {"type": "docker", "image": "img", "secrets": {"GITHUB_TOKEN": "FACTORY_TEST_TOKEN"}, "network": "default", "setup": False}},
+            "targets": {**real()["targets"], "local": {**real()["targets"]["local"], "executor": "box", "harness": "codex", "models": {"luna": "openai/gpt-6", "sonnet": "openai/gpt-6", "sol": "openai/gpt-6"}}},
+        }):
+            gh2 = GitHub(issues={"factory:implement-medium": [{"number": 8}]})
+            self.assertEqual(self.run_local(gh2)[1][0]["result"], "pushed")
+            self.assertFalse(any("setup.sh" in " ".join(a) for _, a in gh2.calls))
+            harness = next(a for k, a in gh2.calls if k == "harness")
+            self.assertIn("--dangerously-bypass-approvals-and-sandbox", harness)
+
 
 class SbxIsolatedRunTest(RunLocalTest):
     """A node run in a `docker-sandbox` (`sbx`) executor: model API allowlist, `sbx secret`, dynamic home, bundle export."""
@@ -812,6 +849,68 @@ class SbxIsolatedRunTest(RunLocalTest):
         # export bundles only origin/main..branch
         bundle_calls = [a for _, a in gh.calls if a[:2] == ["sbx", "exec"] and "bundle" in a]
         self.assertTrue(bundle_calls and bundle_calls[0][-1] == "origin/main..ez/7-add-x", bundle_calls)
+
+    def test_sbx_forwards_env_domains_runs_setup_installs_skills_and_mcp(self):
+        import team_setup
+        team = Path(self.tmp.name) / "sample_team"
+        shutil.copytree(FIXTURE, team)
+        (team / "environments").mkdir()
+        (team / "environments/setup.sh").write_text("#!/bin/sh\necho env_setup\n")
+        (team / "skills/local-skill").mkdir(parents=True)
+        (team / "skills/local-skill/SKILL.md").write_text("# local\n")
+        src_cached = Path(self.tmp.name) / "src_cached"
+        src_cached.mkdir()
+        (src_cached / "SKILL.md").write_text("# cached\n")
+        sha = team_setup.tree_hash(src_cached)
+        cached_dir = Path(".factory/cache/skills") / f"ponytail-{sha[:12]}"
+        shutil.copytree(src_cached, cached_dir)
+        fy = yaml.safe_load((team / "factory.yaml").read_text())
+        fy["defaults"].setdefault("env", {})["YOUTRACK_TOKEN"] = {"required": True, "secret": True}
+        fy["skills"]["ponytail"]["sha256"] = sha
+        fy["skills"]["local-skill"] = {"path": "skills/local-skill"}
+        fy["roles"]["developer"]["skills"] = ["ponytail", "local-skill"]
+        fy["roles"]["developer"]["mcp"] = {"idea": {"command": "npx", "args": ["-y", "@jetbrains/mcp-proxy"]}}
+        fy["environments"]["engine"]["setup"] = "environments/setup.sh"
+        fy["environments"]["engine"]["domains"] = ["pypi.org", "youtrack.jetbrains.com"]
+        (team / "factory.yaml").write_text(yaml.safe_dump(fy, sort_keys=False))
+        cfg.set_team(team)
+        real = cfg.load
+
+        class SbxSetupGitHub(GitHub):
+            def __call__(self, argv, **kw):
+                if argv[:2] == ["sbx", "exec"] and any("HOME:-/home/factory" in a for a in argv):
+                    self.calls.append((None, argv))
+                    return subprocess.CompletedProcess(
+                        argv, 0, "/home/agent\n/home/agent/.factory-box/work\n/home/agent/.factory-box/repos\n/home/agent/.factory-box/opt\n", "")
+                if argv[:2] == ["sbx", "exec"] and "test" in argv and "-f" in argv:
+                    self.calls.append((None, argv))
+                    return subprocess.CompletedProcess(argv, 1, "", "")
+                return super().__call__(argv, **kw)
+
+        with unittest.mock.patch.object(cfg, "load", lambda: {
+            **real(),
+            "executors": {"sbx": {"type": "docker-sandbox", "template": "reg/sbx:1",
+                                  "secrets": {"GITHUB_TOKEN": "FACTORY_TEST_TOKEN"},
+                                  "network": {"allow": ["custom.example.com"]}}},
+            "targets": {**real()["targets"], "local": {**real()["targets"]["local"], "executor": "sbx",
+                                                       "models": {"luna": "anthropic/claude-x", "sonnet": "anthropic/claude-x", "sol": "anthropic/claude-x"}}},
+        }):
+            gh = SbxSetupGitHub(issues={"factory:implement-medium": [{"number": 7}]})
+            code, out = self.run_local(gh)
+        self.assertEqual(code, 0)
+        self.assertEqual(out, [{"ran": "implement-medium", "event": "labeled:107", "result": "pushed"}])
+        policy = next(a for k, a in gh.calls if k == "policy")
+        self.assertIn("pypi.org", policy[4])
+        self.assertIn("youtrack.jetbrains.com", policy[4])
+        self.assertIn("custom.example.com", policy[4])
+        exec_cmds = [" ".join(a) for _, a in gh.calls if a[:2] == ["sbx", "exec"]]
+        self.assertTrue(any("environments/setup.sh" in c and "/home/agent/.local/bin" in c for c in exec_cmds), exec_cmds)
+        self.assertTrue(any("roles/developer/setup.sh" in c for c in exec_cmds), exec_cmds)
+        cp_cmds = [" ".join(a) for _, a in gh.calls if a[:2] == ["sbx", "cp"]]
+        self.assertTrue(any(".mcp.json" in c for c in cp_cmds), cp_cmds)
+        harness = next(a for k, a in gh.calls if k == "harness")
+        self.assertIn("/home/agent/.local/bin", " ".join(harness))
+        self.assertIn("## Local workspace", harness[harness.index("-p") + 1])
 
 
 class FixesAndStartStopTest(unittest.TestCase):
@@ -1012,3 +1111,184 @@ class FixesAndStartStopTest(unittest.TestCase):
         self.assertEqual(code, 0, out.getvalue())
         self.assertEqual(len([c for c in calls if c[:2] == ["docker", "run"]]), 1)
         self.assertEqual(len([c for c in calls if c[:2] == ["docker", "exec"] and "--version" in c]), 2)
+
+    def test_deploy_warns_unmapped_required_env_and_probes_git_gh_in_sandbox(self):
+        team = Path(self.tmp.name) / "sample_deploy_team"
+        shutil.copytree(FIXTURE, team)
+        (team / ".git").mkdir()
+        fy = yaml.safe_load((team / "factory.yaml").read_text())
+        fy["defaults"].setdefault("env", {})["YOUTRACK_TOKEN"] = {"required": True, "secret": True}
+        (team / "factory.yaml").write_text(yaml.safe_dump(fy, sort_keys=False))
+        cfg.set_team(team)
+        real = cfg.load
+
+        def load():
+            c = real()
+            return {**c, "executors": {"box": {"type": "docker", "image": "img", "secrets": {"GITHUB_TOKEN": "TOK"}}},
+                    "targets": {**c["targets"], "local": {"harness": "claude-code", "executor": "box"}}}
+
+        class MissingGhDocker(Machine):
+            def run(self, argv, **kw):
+                if argv[0] == "docker" and "command -v" in " ".join(argv):
+                    return subprocess.CompletedProcess(argv, 1, "gh\n", "")
+                if argv[0] == "docker":
+                    return subprocess.CompletedProcess(argv, 0, "ok\n", "")
+                return super().run(argv, **kw)
+
+        with unittest.mock.patch.object(cfg, "load", load), unittest.mock.patch.dict(os.environ, {"TOK": "t1"}):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = local.deploy([], run=MissingGhDocker(tools=("gh", "docker"), origins=ORIGINS).run,
+                                    which=MissingGhDocker(tools=("gh", "docker"), origins=ORIGINS).which)
+        self.assertEqual(code, 1)
+        self.assertIn("missing executor: box: missing required tool `gh` inside sandbox", out.getvalue())
+
+        class OkDocker(Machine):
+            def run(self, argv, **kw):
+                if argv[0] == "docker":
+                    return subprocess.CompletedProcess(argv, 0, "ok\n", "")
+                return super().run(argv, **kw)
+
+        with unittest.mock.patch.object(cfg, "load", load), unittest.mock.patch.dict(os.environ, {"TOK": "t1"}):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = local.deploy([], run=OkDocker(tools=("gh", "docker"), origins=ORIGINS).run,
+                                    which=OkDocker(tools=("gh", "docker"), origins=ORIGINS).which)
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertIn("warning: executor box: required env var YOUTRACK_TOKEN is not mapped", out.getvalue())
+
+    def test_host_run_executes_setup_once_per_fingerprint_writes_mcp_and_preserves_tracked_skills(self):
+        team = Path(self.tmp.name) / "host_team"
+        shutil.copytree(FIXTURE, team)
+        (team / "environments").mkdir()
+        (team / "environments/setup.sh").write_text("#!/bin/sh\necho v1\n")
+        (team / "skills/local-skill").mkdir(parents=True)
+        (team / "skills/local-skill/SKILL.md").write_text("# local\n")
+        fy = yaml.safe_load((team / "factory.yaml").read_text())
+        fy["skills"]["local-skill"] = {"path": "skills/local-skill"}
+        fy["roles"]["developer"]["skills"] = ["local-skill"]
+        fy["roles"]["developer"]["mcp"] = {"idea": {"command": "npx", "args": ["-y", "@jetbrains/mcp-proxy"]}}
+        fy["environments"]["engine"]["setup"] = "environments/setup.sh"
+        (team / "factory.yaml").write_text(yaml.safe_dump(fy, sort_keys=False))
+        cfg.set_team(team)
+
+        repo = Path(self.tmp.name) / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@e.com"], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "T"], check=True)
+        (repo / ".claude/skills/repo-skill").mkdir(parents=True)
+        (repo / ".claude/skills/repo-skill/SKILL.md").write_text("# repo\n")
+        subprocess.run(["git", "-C", str(repo), "add", ".claude/skills/repo-skill/SKILL.md"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
+
+        local.install_skills(subprocess.run, "developer", "claude-code", repo)
+        self.assertTrue((repo / ".claude/skills/local-skill/SKILL.md").is_file())
+        self.assertTrue((repo / ".claude/skills/repo-skill/SKILL.md").is_file())
+        excl = (repo / ".git/info/exclude").read_text().splitlines()
+        self.assertIn(".claude/skills/local-skill/", excl)
+        self.assertNotIn(".claude/skills/", excl)
+        self.assertEqual(subprocess.run(["git", "-C", str(repo), "status", "--porcelain"], capture_output=True, text=True).stdout, "")
+
+        # Host run executes setup.sh once per fingerprint, writes .mcp.json, and sets PATH with ~/.local/bin
+        real = cfg.load
+        Path(".factory").mkdir(exist_ok=True)
+        Path(".factory/local.json").write_text(json.dumps(
+            {"harness": "claude-code", "factory": str(team), "checkouts": {"slop-factory": str(self.tmp.name)}}))
+        wt = (Path(".factory/worktrees/7/slop-factory")).resolve()
+        wt.mkdir(parents=True, exist_ok=True)
+
+        class HostGitHub(GitHub):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.envs = []
+
+            def __call__(self, argv, **kw):
+                if argv[0] == "claude":
+                    self.envs.append(kw.get("env") or {})
+                return super().__call__(argv, **kw)
+
+        with unittest.mock.patch.object(cfg, "load", lambda: {
+            **real(),
+            "targets": {**real()["targets"], "local": {"harness": "claude-code",
+                                                       "models": {"luna": "anthropic/claude-x", "sonnet": "anthropic/claude-x", "sol": "anthropic/claude-x"}}},
+        }), unittest.mock.patch.dict(os.environ, {"FACTORY_WORKSPACES": self.tmp.name}):
+            gh1 = HostGitHub(issues={"factory:implement-medium": [{"number": 7}]})
+            with contextlib.redirect_stdout(io.StringIO()):
+                local.main(["--local", "--once"], run=gh1)
+            setup_calls_1 = [a for _, a in gh1.calls if a[0] == "bash" and "setup.sh" in a[1]]
+            self.assertEqual(len(setup_calls_1), 2)
+            self.assertTrue((wt / ".mcp.json").is_file())
+            self.assertIn(str(Path.home() / ".local/bin"), gh1.envs[0]["PATH"])
+
+            # second ticket with unchanged setup scripts skips setup.sh
+            gh2 = HostGitHub(issues={"factory:implement-medium": [{"number": 8}]})
+            (Path(".factory/worktrees/8/slop-factory")).mkdir(parents=True, exist_ok=True)
+            with contextlib.redirect_stdout(io.StringIO()):
+                local.main(["--local", "--once"], run=gh2)
+            setup_calls_2 = [a for _, a in gh2.calls if a[0] == "bash" and "setup.sh" in a[1]]
+            self.assertEqual(setup_calls_2, [])
+
+            # modifying setup.sh busts fingerprint and runs again
+            (team / "environments/setup.sh").write_text("#!/bin/sh\necho v2\n")
+            gh3 = HostGitHub(issues={"factory:implement-medium": [{"number": 9}]})
+            (Path(".factory/worktrees/9/slop-factory")).mkdir(parents=True, exist_ok=True)
+            with contextlib.redirect_stdout(io.StringIO()):
+                local.main(["--local", "--once"], run=gh3)
+            setup_calls_3 = [a for _, a in gh3.calls if a[0] == "bash" and "setup.sh" in a[1]]
+            self.assertEqual(len(setup_calls_3), 2)
+
+    def test_github_token_from_gh_fallback_is_opt_in_and_warns(self):
+        real = cfg.load
+        rn = local.runner("codex")
+        ex_opt = local.executor({"executors": {"sbx": {"type": "docker-sandbox",
+                                                       "secrets": {"GITHUB_TOKEN": "MISSING_SANDBOX_TOK"},
+                                                       "github_token_from_gh": True}}}, "sbx")
+        ex_strict = local.executor({"executors": {"sbx": {"type": "docker-sandbox",
+                                                          "secrets": {"GITHUB_TOKEN": "MISSING_SANDBOX_TOK"}}}}, "sbx")
+
+        def fake_gh(argv, **kw):
+            if argv == ["gh", "auth", "token"]:
+                return subprocess.CompletedProcess(argv, 0, "gho_from_cli\n", "")
+            raise AssertionError(argv)
+
+        with unittest.mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MISSING_SANDBOX_TOK", None)
+            self.assertNotIn("GITHUB_TOKEN", local.box_env(ex_strict, rn, run=fake_gh))
+            got = local.box_env(ex_opt, rn, run=fake_gh)
+            self.assertEqual((got["GITHUB_TOKEN"], got["GH_TOKEN"]), ("gho_from_cli", "gho_from_cli"))
+
+        # explicit mapped env var wins over gh auth token
+        with unittest.mock.patch.dict(os.environ, {"MISSING_SANDBOX_TOK": "scoped_tok"}):
+            got = local.box_env(ex_opt, rn, run=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not call gh")))
+            self.assertEqual(got["GITHUB_TOKEN"], "scoped_tok")
+
+        # deploy passes with warning when github_token_from_gh: true and mapped var is unset
+        team = Path(self.tmp.name) / "factory"
+        shutil.copytree(FIXTURE, team)
+        (team / ".git").mkdir()
+        cfg.set_team(team)
+
+        class SbxGhMachine(Machine):
+            def run(self, argv, **kw):
+                if argv[0] == "sbx":
+                    return subprocess.CompletedProcess(argv, 0, "sbx 0.54.1\n", "")
+                if argv == ["gh", "auth", "token"]:
+                    return subprocess.CompletedProcess(argv, 0, "gho_from_cli\n", "")
+                return super().run(argv, **kw)
+
+        def load_sbx():
+            c = real()
+            return {**c, "executors": {"sbx": {"type": "docker-sandbox", "template": "reg/sbx:1",
+                                               "secrets": {"GITHUB_TOKEN": "MISSING_SANDBOX_TOK"},
+                                               "github_token_from_gh": True}},
+                    "targets": {**c["targets"], "local": {"harness": "codex", "executor": "sbx"}}}
+
+        m = SbxGhMachine(tools=("gh", "sbx"), origins=ORIGINS)
+        with unittest.mock.patch.object(cfg, "load", load_sbx), unittest.mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MISSING_SANDBOX_TOK", None)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = local.deploy([], run=m.run, which=m.which)
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertIn("github_token_from_gh falls back to host `gh auth token`", out.getvalue())

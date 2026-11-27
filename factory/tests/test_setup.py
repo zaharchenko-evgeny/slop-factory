@@ -282,3 +282,63 @@ class FetchRetryTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "failed 4 times .*HTTP 429"):
                 team_setup._fetch_run(["git", "clone", "x"], sleep=waits.append)
         self.assertEqual(waits, [2, 2, 4, 8])
+
+
+class ResolveSkillsAndSetupHelpersTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(self.tmp))
+        self.root, self.home, self.cache, self.src = self.tmp / "team", self.tmp / "home", self.tmp / "cache", self.tmp / "src"
+        shutil.copytree(FIXTURE, self.root)
+        (self.src).mkdir()
+        (self.src / "SKILL.md").write_text("---\nname: s\n---\nA skill.\n")
+        digest = team_setup.tree_hash(self.src)
+        path = self.root / "factory.yaml"
+        data = yaml.safe_load(path.read_text())
+        for spec in data["skills"].values():
+            spec["sha256"] = digest
+        (self.root / "skills/local-one").mkdir(parents=True)
+        (self.root / "skills/local-one/SKILL.md").write_text("# local\n")
+        data["skills"]["local-one"] = {"path": "skills/local-one"}
+        data["roles"]["developer"]["skills"].append("local-one")
+        path.write_text(yaml.safe_dump(data, sort_keys=False))
+
+    def test_resolve_role_skills_caches_and_verifies_sha256(self):
+        defn = definition.load(self.root)
+        fetches = []
+
+        def fetcher(spec, tmp):
+            fetches.append(spec["source"])
+            return self.src
+
+        first = dict(team_setup.resolve_role_skills(defn, "developer", cache_dir=self.cache, home=self.home, fetcher=fetcher))
+        self.assertTrue({"ponytail", "tdd", "local-one", "factory-step", "factory-troubleshoot"} <= set(first), first.keys())
+        self.assertGreater(len(fetches), 0)
+        fetches.clear()
+        second = dict(team_setup.resolve_role_skills(defn, "developer", cache_dir=self.cache, home=self.home, fetcher=fetcher))
+        self.assertEqual(fetches, [])
+        self.assertEqual(first["tdd"], second["tdd"])
+
+        bad = self.tmp / "bad"
+        bad.mkdir()
+        (bad / "SKILL.md").write_text("tampered\n")
+        with self.assertRaisesRegex(RuntimeError, "sha256 differs"):
+            team_setup.resolve_role_skills(defn, "developer", cache_dir=self.tmp / "cache2", home=self.home,
+                                            fetcher=lambda spec, tmp: bad)
+
+    def test_setup_scripts_and_fingerprint(self):
+        env_script = self.root / "environments/setup.sh"
+        env_script.parent.mkdir(parents=True)
+        env_script.write_text("#!/bin/sh\necho v1\n")
+        path = self.root / "factory.yaml"
+        data = yaml.safe_load(path.read_text())
+        data["environments"]["engine"]["setup"] = "environments/setup.sh"
+        path.write_text(yaml.safe_dump(data, sort_keys=False))
+        defn = definition.load(self.root)
+        scripts = team_setup.setup_scripts(defn, "engine", "developer")
+        self.assertEqual(scripts, [env_script, self.root / "roles/developer/setup.sh"])
+        fp1 = team_setup.scripts_fingerprint(scripts, self.root)
+        self.assertEqual(len(fp1), 12)
+        env_script.write_text("#!/bin/sh\necho v2\n")
+        self.assertNotEqual(fp1, team_setup.scripts_fingerprint(scripts, self.root))
+        self.assertEqual(team_setup.scripts_fingerprint([]), "")

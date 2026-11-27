@@ -8,4 +8,9 @@ RUN uv pip install --system --break-system-packages pyyaml jinja2 \
 # Install your harness CLI below (nodejs and npm are already installed):
 # RUN npm install -g <your harness CLI>
 USER agent
+ENV PATH="/home/agent/.local/bin:$PATH"
 WORKDIR /work
+# Optional: bake setup.sh tools into the image (set `context: .` on the executor in factory.yaml, then `setup: false`):
+# COPY --chown=agent:agent environments/setup.sh /tmp/setup/environments/setup.sh
+# COPY --chown=agent:agent roles/developer/setup.sh /tmp/setup/roles/developer/setup.sh
+# RUN bash /tmp/setup/environments/setup.sh && rm -rf /tmp/setup
