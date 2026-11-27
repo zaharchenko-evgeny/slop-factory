@@ -25,7 +25,7 @@ import yaml
 import config
 from gate_tracker import GateTracker
 from gate_port import (DescriptorPort, child_attrs, child_links, child_order, in_ticket_repository, number_of, ticket_view,
-                       ticket_from_ref, ticket_ref, ticket_repositories, tracker_repositories)
+                       ticket_from_pr, ticket_from_ref, ticket_ref, ticket_repositories, tracker_repositories)
 from scopes import matches
 from factory_plugins.github import graphql
 from factory_plugins.github.tracker import CountedRun, ProjectWriteRun, RateLimited, checked_out, gh, project_repositories, repository_tokens, random_color
@@ -244,7 +244,7 @@ class GitHubCodeHost:
         holds tickets, else (a repository with no tickets) in the tracker."""
         repository = repository or self.repo
         pr = json.loads(self.run(["api", f"repos/{repository}/pulls/{number}"]))
-        ticket = ticket_from_ref((pr.get("head") or {}).get("ref")) or ticket_from_ref(pr.get("title"))
+        ticket = ticket_from_pr(pr)
         holds = repository.lower() in {r.lower() for r in self.ticket_repos}
         return self.ticket_ref(repository, ticket) if holds and isinstance(ticket, int) else ticket
 
@@ -267,7 +267,7 @@ class GitHubCodeHost:
         """[{number, head, labels}] of the open PRs from a factory branch (`ticket_from_ref`) of `repository`, never a fork's."""
         return [{"number": p["number"], "head": p["head"]["sha"], "labels": [x["name"] for x in p.get("labels") or []]}
                 for p in self._list(f"repos/{repository}/pulls?state=open&per_page=100")
-                if ticket_from_ref(p["head"]["ref"]) is not None
+                if ticket_from_pr(p) is not None
                 and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == repository.lower()]
 
     def head_checks(self, repository, sha):
@@ -289,7 +289,7 @@ class GitHubCodeHost:
 def _on_branch_of(pr, n):
     """Whether PR `pr` (a REST body) is on a factory branch of ticket number `n`: `ez/<n>-*`, or a `branch_pattern`
     with path segments such as `ez/factory/<n>-*` (#1480)."""
-    ticket = ticket_from_ref((pr.get("head") or {}).get("ref"))
+    ticket = ticket_from_pr({**pr, "title": None})  # the title is not trusted here, as before
     return ticket is not None and str(ticket) == str(n)
 
 
@@ -834,7 +834,7 @@ class GitHubGateTracker(DescriptorPort):
             return
         for other in self._list("pulls?state=open&per_page=100", repo=self.pr_repo):
             head = other.get("head") or {}
-            ticket = ticket_from_ref(head.get("ref"))
+            ticket = ticket_from_pr({**other, "title": None})
             if ticket is None or \
                     ((head.get("repo") or {}).get("full_name") or "").lower() != self.pr_repo.lower():
                 continue

@@ -27,6 +27,19 @@ def ticket_from_ref(ref):
     return None if not m else int(m[1]) if m[1].isdigit() else m[1]
 
 
+CLOSING = re.compile(r"(?<![\w])(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)[ \t]*:?[ \t]+#(\d+)\b", re.I)
+
+
+def ticket_from_pr(pr):
+    """The ticket id of a PR (a REST body): its branch, else its title (`ticket_from_ref`), else the first closing
+    keyword of its body (`Closes #198`; a bare `#12` is not one). None when none names a ticket."""
+    pr = pr or {}
+    ticket = ticket_from_ref((pr.get("head") or {}).get("ref")) or ticket_from_ref(pr.get("title"))
+    if ticket is None and (m := CLOSING.search(pr.get("body") or "")):
+        ticket = int(m[1])
+    return ticket
+
+
 REF = re.compile(r"([\w.-]+/[\w.-]+)#(\d+)")
 
 
