@@ -94,7 +94,7 @@ class CountedRun:
 
     def __call__(self, args, **kw):
         read = args[:2] in (["issue", "view"], ["issue", "list"], ["pr", "view"], ["pr", "list"], ["run", "list"]) or (
-            args[0] == "api" and not {"-X", "--method", "-f", "-F"} & set(args)) or (
+            args[0] == "api" and not {"-X", "--method", "-f", "-F", "--input"} & set(args)) or (
             args[:2] == ["api", "graphql"] and not any(str(a).startswith("query=mutation") for a in args))
         path = next((x for x in args if x.startswith("repos/")), "")
         key = tuple(args) if read and self.READ.fullmatch(path) else None

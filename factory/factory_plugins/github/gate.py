@@ -80,6 +80,89 @@ def _lines(text):
     return [json.loads(x) for x in text.splitlines() if x.strip()]
 
 
+def parse_location(location):
+    """`(path, start_line, end_line)` from `path`, `path:42`, or `path:10-20`; `(None, None, None)` when not a path."""
+    raw = str(location or "").strip().strip("`")
+    if not raw or "](" in raw or "://" in raw:
+        return None, None, None
+    path, _, lines = raw.partition(":")
+    path = path.lstrip("./").lstrip("/")
+    if not path:
+        return None, None, None
+    if not lines:
+        return path, None, None
+    m = re.fullmatch(r"(\d+)(?:-(\d+))?", lines.split(":")[0])
+    if not m:
+        return path, None, None
+    a, b = int(m[1]), int(m[2]) if m[2] else None
+    if a <= 0 or (b is not None and b <= 0):
+        return path, None, None
+    if b is not None and b != a:
+        return (path, a, b) if a < b else (path, b, a)
+    return path, None, a
+
+
+def format_location(file_ref, repo, head):
+    """Clickable head-pinned GitHub blob link for `path[:line[-end]]`, or `file_ref` unchanged when unlinked."""
+    path, start, end = parse_location(file_ref)
+    if not path or not repo or not head:
+        return str(file_ref)
+    anchor = f"#L{start}-L{end}" if start and end else f"#L{end}" if end else ""
+    return f"[`{file_ref}`](https://github.com/{repo}/blob/{head}/{path}{anchor})"
+
+
+def diff_right_lines(patch):
+    """Set of right-side line numbers present in a unified diff `patch` (lines GitHub accepts for `side=RIGHT`)."""
+    out, line = set(), None
+    for row in (patch or "").splitlines():
+        if row.startswith("@@"):
+            m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", row)
+            line = int(m[1]) if m else None
+        elif line is not None and row and row[0] in ("+", " "):
+            out.add(line)
+            line += 1
+    return out
+
+
+def _inline_comments(found, diff_lines, defang):
+    """`(comments, inline_ids)` for findings whose `path:line` falls on the PR's right-side diff."""
+    comments, inline_ids = [], set()
+    for x in found:
+        path, start, end = parse_location(x.get("file"))
+        valid = diff_lines.get(path) if path else None
+        if not valid or end not in valid or (start is not None and start not in valid):
+            continue
+        sev = "blocking" if x.get("severity") == "blocking" else "minor"
+        item = {"path": path, "line": end, "side": "RIGHT",
+                "body": defang(f"**{x['id']}** ({sev}) — {x['finding']}")}
+        if start is not None and start < end:
+            item["start_line"], item["start_side"] = start, "RIGHT"
+        comments.append(item)
+        inline_ids.add(x["id"])
+    return comments, inline_ids
+
+
+def _format_findings_section(found, repo, head, inline_ids, defang):
+    """Human-readable `### Blocking` / `### Minor` sections, blank-line separated, keeping `**ID**` at line start."""
+    def render(items, heading):
+        if not items:
+            return ""
+        entries = []
+        for x in items:
+            loc = format_location(x["file"], repo, head)
+            text = defang(x["finding"])
+            if x["id"] in inline_ids:
+                lead = next((ln.strip() for ln in text.splitlines() if ln.strip()), text)
+                entries.append(f"**{x['id']}** {loc} — {lead} *(inline)*")
+            else:
+                entries.append(f"**{x['id']}** {loc} — {text}")
+        return f"### {heading}\n\n" + "\n\n".join(entries)
+
+    blocking = [x for x in found if x.get("severity") == "blocking"]
+    minor = [x for x in found if x.get("severity") != "blocking"]
+    return "\n\n".join(s for s in (render(blocking, "Blocking"), render(minor, "Minor")) if s)
+
+
 def ci_names(run, repository, names=None, branch=BASE_BRANCH):
     """The check names that count as CI: `names` (`environments.<env>.ci.checks`) when given, else the contexts of the
     `required_status_checks` rules of `branch`; None when neither names any, so every check counts. A failed rules
@@ -921,7 +1004,7 @@ class GitHubGateTracker(DescriptorPort):
             m = next(iter(list(MARKER.finditer(r.get("body") or ""))[-1:]), None)  # the footer marker is last; prose cannot follow it
             agent = bool(m) and r["user"]["login"] == self.bot
             verdict = (m[3] if agent else {"APPROVED": "approve", "CHANGES_REQUESTED": "changes"}.get(r["state"]))
-            out.append({"author": r["user"]["login"], "state": r["state"], "commit_id": r["commit_id"],
+            out.append({"id": r.get("id"), "author": r["user"]["login"], "state": r["state"], "commit_id": r["commit_id"],
                         "focus": m[1] if m else None, "round": int(m[2]) if m else None,
                         "outcome": m[4] if m else None,
                         "verdict": verdict, "agent": agent, "assoc": r.get("author_association"), "submitted_at": r.get("submitted_at"),
@@ -1688,10 +1771,36 @@ class GitHubGateTracker(DescriptorPort):
                                        self._since)
         return wrote
 
+    def _pr_diff_lines(self, pr, head):
+        """`{path: set[int]}` of right-side diff lines at `head` (best-effort; empty dict if compare fails)."""
+        base = (pr.get("base") or {}).get("ref")
+        if not base:
+            return {}
+        try:
+            files = self._api(f"compare/{base}...{head}", repo=self.pr_repo).get("files") or []
+        except Exception:
+            return {}
+        return {f["filename"]: diff_right_lines(f["patch"]) for f in files if f.get("filename") and f.get("patch")}
+
+    def _collapse_superseded_reviews(self, pr, focus, head, prior_reviews):
+        """Fold earlier factory reviews of the same `focus` into `<details>` blocks, keeping markers intact."""
+        for r in prior_reviews:
+            if not (r.get("agent") and r.get("focus") == focus and r.get("commit_id") != head and r.get("id")):
+                continue
+            old = r.get("body") or ""
+            if old.lstrip().startswith("<details><summary>Superseded"):
+                continue
+            collapsed = f"<details><summary>Superseded by review at {head[:7]}</summary>\n\n{old}\n\n</details>"
+            try:
+                self.run(["api", "-X", "PUT", f"repos/{self.pr_repo}/pulls/{pr['number']}/reviews/{r['id']}",
+                          "-f", f"body={collapsed}"])
+            except Exception:
+                pass
+
     def _post_review(self, pr, e, focus, reviews, since):
         head = pr["head"]["sha"]
-        existing = [r for r in self._reviews(pr) if r["agent"] and r["focus"] == focus and r["commit_id"] == head]
-        if existing:
+        prior = self._reviews(pr)
+        if any(r["agent"] and r["focus"] == focus and r["commit_id"] == head for r in prior):
             return False
         earlier_change_heads = {r["commit_id"] for r in reviews
                                 if r["agent"] and r["verdict"] == "changes"
@@ -1703,11 +1812,39 @@ class GitHubGateTracker(DescriptorPort):
         marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict}{outcome} -->"
         found = sorted(e.get("findings") or [], key=lambda x: x.get("severity") != "blocking")  # blocking first
         defang = lambda t: str(t).replace("<!--", "<!\u200b--")  # noqa: E731  # prose never carries a marker
-        lines = [defang(f"**{x['id']}** {x['file']} — {x['finding']}") for x in found]
         summary = effects_mod.tagged(defang(e["summary"])) if e.get("summary") else effects_mod.tag_text()
-        body = "\n\n".join(x for x in (summary, "\n".join(lines), marker) if x)
-        if e.get("run_id"):
-            body += f"\n\nFactory-Run: {e['run_id']}"
-        self.run(["api", "-X", "POST", f"repos/{self.pr_repo}/pulls/{pr['number']}/reviews", "-f", f"commit_id={head}",
-                  "-f", "event=COMMENT", "-f", f"body={body}{self._block(e)}"])
+
+        def build_body(inline_ids):
+            sections = _format_findings_section(found, self.pr_repo, head, inline_ids, defang)
+            text = "\n\n".join(x for x in (summary, sections, marker) if x)
+            if e.get("run_id"):
+                text += f"\n\nFactory-Run: {e['run_id']}"
+            return f"{text}{self._block(e)}"
+
+        inline_comments, inline_ids = [], set()
+        if any(parse_location(x.get("file"))[2] for x in found):
+            inline_comments, inline_ids = _inline_comments(found, self._pr_diff_lines(pr, head), defang)
+
+        posted = False
+        if inline_comments:
+            payload = {"commit_id": head, "event": "COMMENT", "body": build_body(inline_ids),
+                       "comments": inline_comments}
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+                    json.dump(payload, tf)
+                    tmp_path = tf.name
+                self.run(["api", "-X", "POST", f"repos/{self.pr_repo}/pulls/{pr['number']}/reviews",
+                          "--input", tmp_path])
+                posted = True
+            except RuntimeError as err:
+                if "422" not in str(err) and "Unprocessable" not in str(err):
+                    raise
+            finally:
+                if tmp_path:
+                    Path(tmp_path).unlink(missing_ok=True)
+        if not posted:
+            self.run(["api", "-X", "POST", f"repos/{self.pr_repo}/pulls/{pr['number']}/reviews",
+                      "-f", f"commit_id={head}", "-f", "event=COMMENT", "-f", f"body={build_body(set())}"])
+        self._collapse_superseded_reviews(pr, focus, head, prior)
         return True
